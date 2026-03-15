@@ -16,10 +16,12 @@ from functools import partial
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.rag import ask, get_qdrant_client, get_openai_client
 from app.cost_tracker import get_summary
+from app.guardrails import check_input
 
 
 # ── Lifespan: open/close clients once ─────────────────────────────────
@@ -80,6 +82,11 @@ class AskResponse(BaseModel):
 @app.post("/ask", response_model=AskResponse)
 async def ask_endpoint(req: AskRequest):
     """Ask a question about UHC insurance policies."""
+    # Input guardrails — reject bad input before hitting the RAG pipeline
+    ok, error_msg = check_input(req.question)
+    if not ok:
+        return JSONResponse(status_code=422, content={"detail": error_msg})
+
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None, partial(ask, req.question, openai_client=openai_client, qdrant_client=qdrant_client)

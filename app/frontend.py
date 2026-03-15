@@ -88,6 +88,14 @@ if question:
                     json={"question": question},
                     timeout=30,
                 )
+
+                # Handle input guardrail rejections (422)
+                if resp.status_code == 422:
+                    detail = resp.json().get("detail", "Invalid input.")
+                    st.warning(detail)
+                    st.session_state.messages.append({"role": "assistant", "content": detail})
+                    st.rerun()
+
                 resp.raise_for_status()
                 data = resp.json()
 
