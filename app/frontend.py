@@ -1,0 +1,123 @@
+"""
+Streamlit chat UI for the insurance policy chatbot.
+
+Simple mental model: This is the user-facing chat interface.
+It sends questions to the FastAPI backend and displays answers with sources.
+
+Run: streamlit run app/frontend.py
+"""
+
+import os
+import streamlit as st
+import requests
+
+# ── Config ─────────────────────────────────────────────────────────────
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+
+# ── Page setup ─────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="CombineHealth — UHC Policy Assistant",
+    page_icon="🏥",
+    layout="centered",
+)
+
+st.title("🏥 CombineHealth")
+st.caption("Ask questions about UnitedHealthcare commercial medical policies")
+
+# ── Example questions ──────────────────────────────────────────────────
+EXAMPLES = [
+    "Is spinal ablation covered under UHC commercial plans?",
+    "What are the prior authorization requirements for knee arthroscopy?",
+    "What CPT codes are associated with cardiac catheterization?",
+    "Is cosmetic rhinoplasty covered?",
+]
+
+# Show examples in sidebar
+with st.sidebar:
+    st.header("Example Questions")
+    for example in EXAMPLES:
+        if st.button(example, key=example, use_container_width=True):
+            st.session_state["prefill_question"] = example
+
+    st.divider()
+    st.markdown(
+        "**About:** This chatbot queries UHC commercial medical & drug policies "
+        "to help doctors and clinic staff check coverage before billing."
+    )
+    st.markdown(
+        "**Disclaimer:** This tool is for informational purposes only. "
+        "Always verify with the official UHC provider portal."
+    )
+
+# ── Chat history ───────────────────────────────────────────────────────
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Display chat history
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        if msg.get("sources"):
+            with st.expander("📄 Sources"):
+                for src in msg["sources"]:
+                    url = src.get("source_url", "")
+                    name = src.get("policy_name", "Unknown Policy")
+                    number = src.get("policy_number", "")
+                    if url:
+                        st.markdown(f"- [{name} ({number})]({url})")
+                    else:
+                        st.markdown(f"- {name} ({number})")
+
+# ── Chat input ─────────────────────────────────────────────────────────
+# Check if there's a prefilled question from sidebar
+prefill = st.session_state.pop("prefill_question", None)
+question = prefill or st.chat_input("Ask about a UHC policy, procedure, or CPT code...")
+
+if question:
+    # Display user message
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    # Call API and display response
+    with st.chat_message("assistant"):
+        with st.spinner("Searching policies..."):
+            try:
+                resp = requests.post(
+                    f"{API_URL}/ask",
+                    json={"question": question},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+                answer = data["answer"]
+                sources = data.get("sources", [])
+
+                st.markdown(answer)
+
+                if sources:
+                    with st.expander("📄 Sources"):
+                        for src in sources:
+                            url = src.get("source_url", "")
+                            name = src.get("policy_name", "Unknown Policy")
+                            number = src.get("policy_number", "")
+                            if url:
+                                st.markdown(f"- [{name} ({number})]({url})")
+                            else:
+                                st.markdown(f"- {name} ({number})")
+
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": answer,
+                    "sources": sources,
+                })
+
+            except requests.exceptions.ConnectionError:
+                err = "⚠️ Cannot connect to the API server. Make sure the backend is running: `uvicorn app.api:app`"
+                st.error(err)
+                st.session_state.messages.append({"role": "assistant", "content": err})
+            except Exception as e:
+                err = f"⚠️ Error: {str(e)}"
+                st.error(err)
+                st.session_state.messages.append({"role": "assistant", "content": err})

@@ -1,0 +1,25 @@
+name: "UnitedHealthcare"
+short_name: "UHC"
+listing_url: "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html"
+base_url: "https://www.uhcprovider.com"
+pdf_url_prefix: "/content/dam/provider/docs/public/policies/comm-medical-drug/"
+
+# Section names in UHC policy PDFs (used for section-aware chunking)
+sections:
+  coverage: "Coverage Rationale"
+  application: "Application"
+  definitions: "Definitions"
+  applicable_codes: "Applicable Codes"
+  description: "Description of Services"
+  clinical_evidence: "Clinical Evidence"
+  fda: "U.S. Food and Drug Administration"
+  references: "References"
+  policy_history: "Policy History/Revision Information"
+  instructions: "Instructions for Use"
+
+# Qdrant collection name (one per insurer for extensibility)
+collection_name: "uhc_policies"
+
+# Scraping settings
+scrape_delay_seconds: 1.5
+user_agent: "UHCPolicyChatbot/1.0 (Educational Project)"
