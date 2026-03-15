@@ -16,7 +16,7 @@ Intents:
 import json
 import re
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from app.config import LLM_MODEL
 from app.cost_tracker import log_call
@@ -163,10 +163,10 @@ def _parse_classifier_response(raw: str) -> dict:
 # ── Public API ──────────────────────────────────────────────────────────
 
 
-def classify_intent(
+async def classify_intent(
     message: str,
     chat_history: list[dict] | None = None,
-    openai_client: OpenAI | None = None,
+    openai_client: AsyncOpenAI | None = None,
 ) -> dict:
     """
     Classify user intent and optionally rewrite the query.
@@ -207,7 +207,7 @@ def classify_intent(
 
     messages = _build_classifier_messages(message, chat_history)
 
-    response = openai_client.chat.completions.create(
+    response = await openai_client.chat.completions.create(
         model=LLM_MODEL,
         messages=messages,
         temperature=0.0,  # deterministic classification

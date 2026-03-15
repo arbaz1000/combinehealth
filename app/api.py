@@ -10,9 +10,7 @@ Endpoints:
   GET  /costs      → View OpenAI API cost summary
 """
 
-import asyncio
 from contextlib import asynccontextmanager
-from functools import partial
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -99,16 +97,11 @@ async def ask_endpoint(req: AskRequest):
     # Convert chat_history from Pydantic models to dicts for the pipeline
     history = [msg.model_dump() for msg in req.chat_history] if req.chat_history else None
 
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        partial(
-            ask,
-            sanitized,
-            openai_client=openai_client,
-            qdrant_client=qdrant_client,
-            chat_history=history,
-        ),
+    result = await ask(
+        sanitized,
+        openai_client=openai_client,
+        qdrant_client=qdrant_client,
+        chat_history=history,
     )
     return AskResponse(**result)
 

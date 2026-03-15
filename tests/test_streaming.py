@@ -6,17 +6,19 @@ and sequencing without hitting external services.
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.rag import ask_stream, _sse_event
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-def _parse_events(generator) -> list[dict]:
-    """Collect SSE events from a generator, parse each into a dict."""
+async def _parse_events(async_generator) -> list[dict]:
+    """Collect SSE events from an async generator, parse each into a dict."""
     events = []
-    for raw in generator:
+    async for raw in async_generator:
         assert raw.startswith("data: "), f"SSE line must start with 'data: ', got: {raw!r}"
         assert raw.endswith("\n\n"), f"SSE line must end with double newline, got: {raw!r}"
         payload = raw[len("data: "):-2]  # strip "data: " prefix and "\n\n" suffix
@@ -36,30 +38,10 @@ def _chunk(score: float, text: str = "Sample policy text.") -> dict:
     }
 
 
-def _mock_stream_chunks(tokens: list[str]):
-    """
-    Create mock OpenAI streaming chunks.
-
-    Each token becomes a chunk with delta.content set.
-    Final chunk has usage stats and no content.
-    """
-    chunks = []
+async def _async_gen(tokens: list[str]):
+    """Create an async generator from a list of tokens."""
     for token in tokens:
-        chunk = MagicMock()
-        chunk.choices = [MagicMock()]
-        chunk.choices[0].delta.content = token
-        chunk.usage = None
-        chunks.append(chunk)
-
-    # Final chunk with usage (no content)
-    final = MagicMock()
-    final.choices = []
-    final.usage = MagicMock()
-    final.usage.prompt_tokens = 100
-    final.usage.completion_tokens = len(tokens)
-    chunks.append(final)
-
-    return chunks
+        yield token
 
 
 # ── SSE event formatting ────────────────────────────────────────────────
@@ -78,9 +60,10 @@ def test_sse_event_with_content():
 
 # ── Greeting intent (Tier 1 regex — no OpenAI call) ────────────────────
 
-def test_stream_greeting_word_by_word():
+@pytest.mark.asyncio
+async def test_stream_greeting_word_by_word():
     """Greeting should stream canned response word-by-word via SSE."""
-    events = _parse_events(ask_stream(
+    events = await _parse_events(ask_stream(
         "Hi",
         openai_client=MagicMock(),
         qdrant_client=MagicMock(),
@@ -107,9 +90,10 @@ def test_stream_greeting_word_by_word():
     assert events[-1]["type"] == "done"
 
 
-def test_stream_thanks():
+@pytest.mark.asyncio
+async def test_stream_thanks():
     """Thanks (Tier 1) also streams word-by-word."""
-    events = _parse_events(ask_stream(
+    events = await _parse_events(ask_stream(
         "Thanks!",
         openai_client=MagicMock(),
         qdrant_client=MagicMock(),
@@ -126,9 +110,10 @@ def test_stream_thanks():
 
 # ── Event sequence order ────────────────────────────────────────────────
 
-def test_stream_event_order_greeting():
+@pytest.mark.asyncio
+async def test_stream_event_order_greeting():
     """Events must arrive in order: intent → token(s) → sources → done."""
-    events = _parse_events(ask_stream(
+    events = await _parse_events(ask_stream(
         "Hello!",
         openai_client=MagicMock(),
         qdrant_client=MagicMock(),
@@ -144,10 +129,11 @@ def test_stream_event_order_greeting():
         assert t == "token"
 
 
-@patch("app.rag.classify_intent")
-@patch("app.rag.retrieve")
+@pytest.mark.asyncio
+@patch("app.rag.classify_intent", new_callable=AsyncMock)
+@patch("app.rag.retrieve", new_callable=AsyncMock)
 @patch("app.rag.generate_answer_stream")
-def test_stream_event_order_policy_query(mock_gen_stream, mock_retrieve, mock_classify):
+async def test_stream_event_order_policy_query(mock_gen_stream, mock_retrieve, mock_classify):
     """Policy query: intent → tokens → sources → done."""
     mock_classify.return_value = {
         "intent": "policy_query",
@@ -155,9 +141,9 @@ def test_stream_event_order_policy_query(mock_gen_stream, mock_retrieve, mock_cl
         "rewritten_query": "Is spinal ablation covered?",
     }
     mock_retrieve.return_value = [_chunk(0.85, "Ablation is covered.")]
-    mock_gen_stream.return_value = iter(["Spinal ", "ablation ", "is ", "covered."])
+    mock_gen_stream.return_value = _async_gen(["Spinal ", "ablation ", "is ", "covered."])
 
-    events = _parse_events(ask_stream(
+    events = await _parse_events(ask_stream(
         "Is spinal ablation covered?",
         openai_client=MagicMock(),
         qdrant_client=MagicMock(),
@@ -173,10 +159,11 @@ def test_stream_event_order_policy_query(mock_gen_stream, mock_retrieve, mock_cl
 
 # ── Policy query streaming ──────────────────────────────────────────────
 
-@patch("app.rag.classify_intent")
-@patch("app.rag.retrieve")
+@pytest.mark.asyncio
+@patch("app.rag.classify_intent", new_callable=AsyncMock)
+@patch("app.rag.retrieve", new_callable=AsyncMock)
 @patch("app.rag.generate_answer_stream")
-def test_stream_policy_query_tokens(mock_gen_stream, mock_retrieve, mock_classify):
+async def test_stream_policy_query_tokens(mock_gen_stream, mock_retrieve, mock_classify):
     """Policy query tokens arrive individually and reconstruct the answer."""
     mock_classify.return_value = {
         "intent": "policy_query",
@@ -184,9 +171,9 @@ def test_stream_policy_query_tokens(mock_gen_stream, mock_retrieve, mock_classif
         "rewritten_query": "Is ablation covered?",
     }
     mock_retrieve.return_value = [_chunk(0.85, "Ablation is covered under policy TP-001.")]
-    mock_gen_stream.return_value = iter(["Yes, ", "ablation ", "is ", "covered."])
+    mock_gen_stream.return_value = _async_gen(["Yes, ", "ablation ", "is ", "covered."])
 
-    events = _parse_events(ask_stream(
+    events = await _parse_events(ask_stream(
         "Is ablation covered?",
         openai_client=MagicMock(),
         qdrant_client=MagicMock(),
@@ -208,10 +195,11 @@ def test_stream_policy_query_tokens(mock_gen_stream, mock_retrieve, mock_classif
     assert sources_event["sources"][0]["policy_number"] == "TP-001"
 
 
-@patch("app.rag.classify_intent")
-@patch("app.rag.retrieve")
+@pytest.mark.asyncio
+@patch("app.rag.classify_intent", new_callable=AsyncMock)
+@patch("app.rag.retrieve", new_callable=AsyncMock)
 @patch("app.rag.generate_answer_stream")
-def test_stream_policy_query_with_rewritten_query(mock_gen_stream, mock_retrieve, mock_classify):
+async def test_stream_policy_query_with_rewritten_query(mock_gen_stream, mock_retrieve, mock_classify):
     """Follow-up intent sends rewritten_query in the intent event."""
     mock_classify.return_value = {
         "intent": "follow_up",
@@ -219,9 +207,9 @@ def test_stream_policy_query_with_rewritten_query(mock_gen_stream, mock_retrieve
         "rewritten_query": "What CPT codes apply to spinal ablation under UHC?",
     }
     mock_retrieve.return_value = [_chunk(0.70)]
-    mock_gen_stream.return_value = iter(["CPT ", "codes."])
+    mock_gen_stream.return_value = _async_gen(["CPT ", "codes."])
 
-    events = _parse_events(ask_stream(
+    events = await _parse_events(ask_stream(
         "What CPT codes apply?",
         openai_client=MagicMock(),
         qdrant_client=MagicMock(),
@@ -238,10 +226,11 @@ def test_stream_policy_query_with_rewritten_query(mock_gen_stream, mock_retrieve
 
 # ── No retrieval results ────────────────────────────────────────────────
 
-@patch("app.rag.classify_intent")
-@patch("app.rag.retrieve")
+@pytest.mark.asyncio
+@patch("app.rag.classify_intent", new_callable=AsyncMock)
+@patch("app.rag.retrieve", new_callable=AsyncMock)
 @patch("app.rag.generate_answer_stream")
-def test_stream_no_retrieval_results(mock_gen_stream, mock_retrieve, mock_classify):
+async def test_stream_no_retrieval_results(mock_gen_stream, mock_retrieve, mock_classify):
     """When no chunks survive filtering, LLM is still called (closed-book)."""
     mock_classify.return_value = {
         "intent": "policy_query",
@@ -249,9 +238,9 @@ def test_stream_no_retrieval_results(mock_gen_stream, mock_retrieve, mock_classi
         "rewritten_query": "Does UHC cover time travel?",
     }
     mock_retrieve.return_value = [_chunk(0.10), _chunk(0.20)]  # all below threshold
-    mock_gen_stream.return_value = iter(["No ", "matching ", "policy ", "found."])
+    mock_gen_stream.return_value = _async_gen(["No ", "matching ", "policy ", "found."])
 
-    events = _parse_events(ask_stream(
+    events = await _parse_events(ask_stream(
         "Does UHC cover time travel?",
         openai_client=MagicMock(),
         qdrant_client=MagicMock(),
@@ -273,8 +262,9 @@ def test_stream_no_retrieval_results(mock_gen_stream, mock_retrieve, mock_classi
 
 # ── Off-topic streaming ─────────────────────────────────────────────────
 
-@patch("app.rag.classify_intent")
-def test_stream_off_topic(mock_classify):
+@pytest.mark.asyncio
+@patch("app.rag.classify_intent", new_callable=AsyncMock)
+async def test_stream_off_topic(mock_classify):
     """Off-topic intent streams canned response word-by-word, no retrieval."""
     mock_classify.return_value = {
         "intent": "off_topic",
@@ -282,7 +272,7 @@ def test_stream_off_topic(mock_classify):
         "rewritten_query": None,
     }
 
-    events = _parse_events(ask_stream(
+    events = await _parse_events(ask_stream(
         "What is the weather?",
         openai_client=MagicMock(),
         qdrant_client=MagicMock(),
@@ -318,12 +308,16 @@ def test_stream_endpoint_input_guardrail():
 
         # PII (SSN) → redacted and processed, not rejected
         with patch("app.api.ask_stream") as mock_ask_stream:
-            mock_ask_stream.return_value = iter([
-                _sse_event({"type": "intent", "intent": "policy_query", "rewritten_query": None}),
-                _sse_event({"type": "token", "content": "Redacted query processed."}),
-                _sse_event({"type": "sources", "sources": []}),
-                _sse_event({"type": "done"}),
-            ])
+            async def _mock_stream(*args, **kwargs):
+                for event in [
+                    _sse_event({"type": "intent", "intent": "policy_query", "rewritten_query": None}),
+                    _sse_event({"type": "token", "content": "Redacted query processed."}),
+                    _sse_event({"type": "sources", "sources": []}),
+                    _sse_event({"type": "done"}),
+                ]:
+                    yield event
+
+            mock_ask_stream.return_value = _mock_stream()
             resp = client.post("/ask/stream", json={"question": "My SSN is 123-45-6789"})
             assert resp.status_code == 200
             # Verify ask_stream received the redacted text
@@ -349,13 +343,17 @@ def test_stream_endpoint_returns_event_stream():
     try:
         with _patch("app.api.ask_stream") as mock_ask_stream:
             # Simulate a greeting SSE stream
-            mock_ask_stream.return_value = iter([
-                _sse_event({"type": "intent", "intent": "greeting", "rewritten_query": None}),
-                _sse_event({"type": "token", "content": "Hello! "}),
-                _sse_event({"type": "token", "content": "How can I help?"}),
-                _sse_event({"type": "sources", "sources": []}),
-                _sse_event({"type": "done"}),
-            ])
+            async def _mock_stream(*args, **kwargs):
+                for event in [
+                    _sse_event({"type": "intent", "intent": "greeting", "rewritten_query": None}),
+                    _sse_event({"type": "token", "content": "Hello! "}),
+                    _sse_event({"type": "token", "content": "How can I help?"}),
+                    _sse_event({"type": "sources", "sources": []}),
+                    _sse_event({"type": "done"}),
+                ]:
+                    yield event
+
+            mock_ask_stream.return_value = _mock_stream()
 
             client = TestClient(app, raise_server_exceptions=True)
             resp = client.post("/ask/stream", json={"question": "Hello!"})

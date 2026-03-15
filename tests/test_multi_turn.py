@@ -8,7 +8,9 @@ Covers:
 - Frontend history format (role + content only)
 """
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch, call
+
+import pytest
 
 from app.rag import sanitize_history, truncate_history, generate_answer
 
@@ -160,23 +162,24 @@ def test_truncate_with_max_turns_1():
 
 
 def _make_mock_openai_client(answer_text: str = "Mocked answer") -> MagicMock:
-    """Create a mock OpenAI client for generate_answer."""
+    """Create a mock AsyncOpenAI client for generate_answer."""
     mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
     mock_response.choices[0].message.content = answer_text
     mock_response.usage.prompt_tokens = 200
     mock_response.usage.completion_tokens = 100
-    mock_client.chat.completions.create.return_value = mock_response
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
     return mock_client
 
 
-def test_generate_answer_without_history():
+@pytest.mark.asyncio
+async def test_generate_answer_without_history():
     """Without history, messages should be [system, user] only."""
     mock_client = _make_mock_openai_client()
 
     with patch("app.rag.log_call"):
-        generate_answer("Is ablation covered?", "some context", mock_client)
+        await generate_answer("Is ablation covered?", "some context", mock_client)
 
     call_kwargs = mock_client.chat.completions.create.call_args
     messages = call_kwargs[1]["messages"]
@@ -185,7 +188,8 @@ def test_generate_answer_without_history():
     assert messages[1]["role"] == "user"
 
 
-def test_generate_answer_with_history():
+@pytest.mark.asyncio
+async def test_generate_answer_with_history():
     """With history, messages should be [system, ...history turns..., user]."""
     mock_client = _make_mock_openai_client()
 
@@ -195,7 +199,7 @@ def test_generate_answer_with_history():
     ]
 
     with patch("app.rag.log_call"):
-        generate_answer("What CPT codes apply?", "some context", mock_client, chat_history=history)
+        await generate_answer("What CPT codes apply?", "some context", mock_client, chat_history=history)
 
     call_kwargs = mock_client.chat.completions.create.call_args
     messages = call_kwargs[1]["messages"]
@@ -208,7 +212,8 @@ def test_generate_answer_with_history():
     assert "CPT codes" in messages[3]["content"]
 
 
-def test_generate_answer_history_as_native_messages():
+@pytest.mark.asyncio
+async def test_generate_answer_history_as_native_messages():
     """History should be injected as native role messages, not as text in the user prompt."""
     mock_client = _make_mock_openai_client()
 
@@ -218,7 +223,7 @@ def test_generate_answer_history_as_native_messages():
     ]
 
     with patch("app.rag.log_call"):
-        generate_answer("Follow-up", "context", mock_client, chat_history=history)
+        await generate_answer("Follow-up", "context", mock_client, chat_history=history)
 
     call_kwargs = mock_client.chat.completions.create.call_args
     messages = call_kwargs[1]["messages"]
@@ -238,11 +243,12 @@ def test_generate_answer_history_as_native_messages():
 # ── ask() integration with history ────────────────────────────────────
 
 
-def test_ask_sanitizes_and_truncates_history():
+@pytest.mark.asyncio
+async def test_ask_sanitizes_and_truncates_history():
     """ask() should sanitize and truncate history before passing to classifier and LLM."""
-    with patch("app.rag.classify_intent") as mock_classify, \
-         patch("app.rag.retrieve") as mock_retrieve, \
-         patch("app.rag.generate_answer") as mock_generate, \
+    with patch("app.rag.classify_intent", new_callable=AsyncMock) as mock_classify, \
+         patch("app.rag.retrieve", new_callable=AsyncMock) as mock_retrieve, \
+         patch("app.rag.generate_answer", new_callable=AsyncMock) as mock_generate, \
          patch("app.rag.get_openai_client") as mock_oai, \
          patch("app.rag.get_qdrant_client") as mock_qd:
 
@@ -265,7 +271,7 @@ def test_ask_sanitizes_and_truncates_history():
         ]
 
         from app.rag import ask
-        ask("Is ablation covered?", chat_history=messy_history)
+        await ask("Is ablation covered?", chat_history=messy_history)
 
         # Classifier should receive sanitized history
         classify_call = mock_classify.call_args

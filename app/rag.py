@@ -12,7 +12,7 @@ All OpenAI calls (embedding + LLM) are cost-tracked automatically.
 
 import json
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 from qdrant_client import QdrantClient, models
 
 from app.config import (
@@ -161,17 +161,17 @@ def truncate_history(history: list[dict], max_turns: int = MAX_HISTORY_TURNS) ->
     return history[-max_messages:]
 
 
-def get_openai_client() -> OpenAI:
-    return OpenAI(api_key=OPENAI_API_KEY)
+def get_openai_client() -> AsyncOpenAI:
+    return AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 
 def get_qdrant_client() -> QdrantClient:
     return QdrantClient(path=QDRANT_PATH)
 
 
-def embed_query(query: str, client: OpenAI) -> list[float]:
+async def embed_query(query: str, client: AsyncOpenAI) -> list[float]:
     """Embed a single query string. Cost-tracked."""
-    response = client.embeddings.create(
+    response = await client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=query,
     )
@@ -184,11 +184,11 @@ def embed_query(query: str, client: OpenAI) -> list[float]:
     return response.data[0].embedding
 
 
-def retrieve(query: str, openai_client: OpenAI, qdrant_client: QdrantClient, top_k: int = TOP_K) -> list[dict]:
+async def retrieve(query: str, openai_client: AsyncOpenAI, qdrant_client: QdrantClient, top_k: int = TOP_K) -> list[dict]:
     """
     Embed query with OpenAI, then search Qdrant by cosine similarity.
     """
-    query_vector = embed_query(query, openai_client)
+    query_vector = await embed_query(query, openai_client)
 
     results = qdrant_client.query_points(
         collection_name=QDRANT_COLLECTION,
@@ -235,10 +235,10 @@ def build_sources(chunks: list[dict]) -> list[dict]:
     return sources
 
 
-def generate_answer_stream(
+async def generate_answer_stream(
     question: str,
     context: str,
-    client: OpenAI,
+    client: AsyncOpenAI,
     chat_history: list[dict] | None = None,
     retrieval_confidence: str = "high",
 ):
@@ -263,7 +263,7 @@ def generate_answer_stream(
 
     messages.append({"role": "user", "content": user_prompt})
 
-    stream = client.chat.completions.create(
+    stream = await client.chat.completions.create(
         model=LLM_MODEL,
         messages=messages,
         temperature=LLM_TEMPERATURE,
@@ -272,7 +272,7 @@ def generate_answer_stream(
         stream_options={"include_usage": True},
     )
 
-    for chunk in stream:
+    async for chunk in stream:
         # Final chunk carries usage stats (content is None)
         if chunk.usage is not None:
             log_call(
@@ -287,10 +287,10 @@ def generate_answer_stream(
             yield chunk.choices[0].delta.content
 
 
-def generate_answer(
+async def generate_answer(
     question: str,
     context: str,
-    client: OpenAI,
+    client: AsyncOpenAI,
     chat_history: list[dict] | None = None,
     retrieval_confidence: str = "high",
 ) -> str:
@@ -322,7 +322,7 @@ def generate_answer(
 
     messages.append({"role": "user", "content": user_prompt})
 
-    response = client.chat.completions.create(
+    response = await client.chat.completions.create(
         model=LLM_MODEL,
         messages=messages,
         temperature=LLM_TEMPERATURE,
@@ -341,9 +341,9 @@ def generate_answer(
     return response.choices[0].message.content
 
 
-def ask(
+async def ask(
     question: str,
-    openai_client: OpenAI | None = None,
+    openai_client: AsyncOpenAI | None = None,
     qdrant_client: QdrantClient | None = None,
     chat_history: list[dict] | None = None,
 ) -> dict:
@@ -367,7 +367,7 @@ def ask(
     history = truncate_history(history)
 
     # 1. Classify intent + rewrite if needed
-    classification = classify_intent(question, history, openai_client=oai)
+    classification = await classify_intent(question, history, openai_client=oai)
     intent = classification["intent"]
 
     # 2. For greeting/off_topic — return direct response, skip retrieval
@@ -382,7 +382,7 @@ def ask(
 
     # 3. Use rewritten query for retrieval (important for follow-ups)
     search_query = classification["rewritten_query"] or question
-    raw_chunks = retrieve(search_query, oai, qd)
+    raw_chunks = await retrieve(search_query, oai, qd)
 
     # 4. Retrieval guardrails — filter by score, determine confidence tier
     chunks, confidence = check_retrieval(raw_chunks)
@@ -391,7 +391,7 @@ def ask(
     context = build_context(chunks) if chunks else ""
 
     # 6. Generate answer — LLM is ALWAYS called, with tier-appropriate instructions
-    answer = generate_answer(
+    answer = await generate_answer(
         question, context, oai,
         chat_history=history,
         retrieval_confidence=confidence,
@@ -418,9 +418,9 @@ def _sse_event(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-def ask_stream(
+async def ask_stream(
     question: str,
-    openai_client: OpenAI | None = None,
+    openai_client: AsyncOpenAI | None = None,
     qdrant_client: QdrantClient | None = None,
     chat_history: list[dict] | None = None,
 ):
@@ -444,7 +444,7 @@ def ask_stream(
     history = truncate_history(history)
 
     # 1. Classify intent + rewrite if needed
-    classification = classify_intent(question, history, openai_client=oai)
+    classification = await classify_intent(question, history, openai_client=oai)
     intent = classification["intent"]
 
     # Send intent event
@@ -467,7 +467,7 @@ def ask_stream(
 
     # 3. Use rewritten query for retrieval
     search_query = classification["rewritten_query"] or question
-    raw_chunks = retrieve(search_query, oai, qd)
+    raw_chunks = await retrieve(search_query, oai, qd)
 
     # 4. Retrieval guardrails
     chunks, confidence = check_retrieval(raw_chunks)
@@ -477,7 +477,7 @@ def ask_stream(
 
     # 6. Stream answer token-by-token from LLM, accumulate for output guardrails
     accumulated_answer = []
-    for token in generate_answer_stream(
+    async for token in generate_answer_stream(
         question, context, oai,
         chat_history=history,
         retrieval_confidence=confidence,
