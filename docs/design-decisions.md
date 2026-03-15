@@ -69,3 +69,40 @@ This document captures product and design reasoning behind decisions that aren't
 - **Configurable per-deployment:** Expose `MAX_HISTORY_TURNS` as an environment variable for production tuning without code changes.
 
 ---
+
+## DD-4: Retrieval Guardrails — Tiered Prompting, Never Skip the LLM
+
+**Date:** 2026-03-16
+
+**Decision:** Filter retrieved chunks by cosine similarity score AND use three confidence-tiered prompt templates, but always call the LLM — never return a canned response for low/no retrieval results.
+
+**Context:** The original plan (Block 4) specified skipping the LLM call entirely when zero chunks survive score filtering, returning a hardcoded "I couldn't find relevant policy information" string. We revised this approach.
+
+**What we do:**
+
+| Retrieval tier | Condition | LLM behavior |
+|---|---|---|
+| **High** | Best chunk ≥ 0.5 | Normal RAG: "Answer based on this context" |
+| **Low** | Chunks survive but best < 0.5 | "Context may not be relevant. Use if helpful, state uncertainty clearly. Do not fill gaps." |
+| **None** | All chunks below 0.35 (or zero results) | "No context found. Do NOT answer from your own knowledge. Explain that no policy was found, suggest rephrasing." |
+
+**Rationale:**
+
+1. **LLM is smarter than a cosine score.** A chunk at 0.33 might actually contain the answer — vector similarity is a rough proxy for relevance. By always calling the LLM, we let it make the final judgment on whether the context is useful, while constraining it with tier-specific instructions.
+
+2. **Consistent UX.** A canned string feels jarring compared to the LLM's natural tone. Even when no context is found, the LLM can suggest how to rephrase the query or recommend contacting UHC directly — genuinely helpful, not just a dead end.
+
+3. **Closed-book enforcement.** In every tier, the LLM is explicitly instructed to NEVER use its internal knowledge about insurance policies or coverage. This is critical — GPT-4o-mini has training data about UHC policies that may be outdated or wrong. The LLM must only synthesize from retrieved context, or clearly state it has no information.
+
+4. **Minimal cost impact.** One GPT-4o-mini call for "no results" queries costs ~$0.0001. The UX improvement far outweighs this.
+
+**Thresholds:**
+- `RETRIEVAL_SCORE_THRESHOLD = 0.35` — chunks below this are dropped. Chosen as a conservative floor for OpenAI `text-embedding-3-small` cosine similarity on insurance policy text. Should be tuned after evaluating retrieval quality (Block 9).
+- `RETRIEVAL_LOW_CONFIDENCE_THRESHOLD = 0.5` — below this, the LLM gets uncertainty caveats. Based on observed score distributions where <0.5 correlates with tangential matches.
+
+**Production extensions (when to revisit):**
+- **Cross-encoder reranking.** A reranker (Cohere Rerank, bge-reranker-v2-m3) between vector search and filtering would produce far more accurate relevance scores, making these thresholds more meaningful. Adds ~100-200ms and ~$0.0001/query. Recommended when scaling beyond prototype.
+- **Adaptive thresholds.** Instead of fixed values, learn per-query-type thresholds from evaluation data.
+- **Chunk-level LLM relevance scoring.** Ask the LLM to grade each chunk's relevance before generation. Expensive but highest accuracy.
+
+---

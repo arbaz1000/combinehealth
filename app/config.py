@@ -39,6 +39,12 @@ LLM_MAX_TOKENS = 1024
 # ── RAG settings ──────────────────────────────────────────────────────
 TOP_K = 8  # number of chunks to retrieve
 
+# ── Retrieval guardrail settings ─────────────────────────────────────
+# Chunks scoring below this are dropped before reaching the LLM.
+RETRIEVAL_SCORE_THRESHOLD = 0.35
+# If the best surviving chunk is below this, the LLM gets a low-confidence caveat.
+RETRIEVAL_LOW_CONFIDENCE_THRESHOLD = 0.5
+
 # ── Conversation settings ─────────────────────────────────────────────
 # Max turn-pairs (user+assistant) to include in LLM context.
 # 5 pairs = 10 messages. Increase for longer context at higher token cost.

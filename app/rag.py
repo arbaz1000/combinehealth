@@ -26,6 +26,7 @@ from app.config import (
 )
 from app.cost_tracker import log_call
 from app.classifier import classify_intent
+from app.guardrails import check_retrieval
 
 # ── System prompt ──────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an expert insurance policy assistant for doctors and clinic staff.
@@ -42,15 +43,50 @@ RULES:
 8. When asked about a specific procedure or diagnosis, also note any related policies the user might want to review.
 """
 
-USER_PROMPT_TEMPLATE = """Based on the following UHC policy excerpts, answer the user's question.
+# ── Per-tier user prompt templates ────────────────────────────────────
+# The LLM is ALWAYS called, but gets different instructions based on
+# retrieval confidence. In every tier it is forbidden from using its
+# own internal knowledge — answers must come only from retrieved context.
+
+USER_PROMPT_HIGH_CONFIDENCE = """Based on the following UHC policy excerpts, answer the user's question.
 
 --- POLICY CONTEXT ---
 {context}
 --- END CONTEXT ---
 
+IMPORTANT: Use ONLY the policy context above. Do NOT use your own knowledge about insurance policies, medical procedures, or coverage. If the context does not contain enough information to fully answer, say so — do not fill gaps with outside knowledge.
+
 User question: {question}
 
 Provide a clear, structured answer with policy citations."""
+
+USER_PROMPT_LOW_CONFIDENCE = """The following UHC policy excerpts were retrieved but may not be directly relevant to the question. Use them if they are helpful, but be transparent about uncertainty.
+
+--- POLICY CONTEXT (potentially low relevance) ---
+{context}
+--- END CONTEXT ---
+
+IMPORTANT:
+- Use ONLY the policy context above. Do NOT use your own knowledge about insurance policies, medical procedures, or coverage.
+- If the context does not adequately address the question, clearly state that the retrieved policies may not cover this topic.
+- Do NOT guess or infer coverage details that are not explicitly stated in the context.
+- Suggest that the user rephrase their question or contact UHC directly for clarification.
+
+User question: {question}
+
+Provide what information you can from the context, clearly noting any uncertainty."""
+
+USER_PROMPT_NO_CONTEXT = """No relevant UHC policy excerpts were found for the user's question.
+
+IMPORTANT:
+- Do NOT answer the question using your own knowledge. You do not have reliable information about UHC policy coverage beyond what is retrieved from the policy database.
+- Explain that no matching policy information was found.
+- Suggest the user try rephrasing their question with more specific terms (procedure names, CPT codes, diagnosis codes).
+- Recommend contacting UHC directly for coverage questions you cannot answer from the policy database.
+
+User question: {question}
+
+Respond helpfully while making clear you cannot provide policy details without matching context."""
 
 
 # ── History helpers ────────────────────────────────────────────────────
@@ -176,6 +212,7 @@ def generate_answer(
     context: str,
     client: OpenAI,
     chat_history: list[dict] | None = None,
+    retrieval_confidence: str = "high",
 ) -> str:
     """
     Call GPT-4o-mini with the RAG context. Cost-tracked.
@@ -184,8 +221,18 @@ def generate_answer(
     user/assistant messages between the system prompt and the current
     RAG prompt. This gives the model natural conversational context
     (vs. stuffing history into the user prompt as flat text).
+
+    retrieval_confidence controls which prompt template is used:
+      "high" — normal RAG prompt
+      "low"  — adds uncertainty caveats
+      "none" — no context, instructs LLM to say it couldn't find info
     """
-    user_prompt = USER_PROMPT_TEMPLATE.format(context=context, question=question)
+    if retrieval_confidence == "none":
+        user_prompt = USER_PROMPT_NO_CONTEXT.format(question=question)
+    elif retrieval_confidence == "low":
+        user_prompt = USER_PROMPT_LOW_CONFIDENCE.format(context=context, question=question)
+    else:
+        user_prompt = USER_PROMPT_HIGH_CONFIDENCE.format(context=context, question=question)
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -255,24 +302,22 @@ def ask(
 
     # 3. Use rewritten query for retrieval (important for follow-ups)
     search_query = classification["rewritten_query"] or question
-    chunks = retrieve(search_query, oai, qd)
+    raw_chunks = retrieve(search_query, oai, qd)
 
-    if not chunks:
-        return {
-            "answer": "I couldn't find any relevant policy information for your question. Please try rephrasing or ask about a specific procedure, diagnosis, or CPT code.",
-            "sources": [],
-            "chunks_used": 0,
-            "intent": intent,
-            "rewritten_query": classification["rewritten_query"],
-        }
+    # 4. Retrieval guardrails — filter by score, determine confidence tier
+    chunks, confidence = check_retrieval(raw_chunks)
 
-    # 4. Build context from retrieved chunks
-    context = build_context(chunks)
+    # 5. Build context (empty string for "none" tier)
+    context = build_context(chunks) if chunks else ""
 
-    # 5. Generate answer (with conversation history for multi-turn context)
-    answer = generate_answer(question, context, oai, chat_history=history)
+    # 6. Generate answer — LLM is ALWAYS called, with tier-appropriate instructions
+    answer = generate_answer(
+        question, context, oai,
+        chat_history=history,
+        retrieval_confidence=confidence,
+    )
 
-    # 6. Extract sources
+    # 7. Extract sources (only from chunks that survived filtering)
     sources = build_sources(chunks)
 
     return {
@@ -281,4 +326,5 @@ def ask(
         "chunks_used": len(chunks),
         "intent": intent,
         "rewritten_query": classification["rewritten_query"],
+        "retrieval_confidence": confidence,
     }

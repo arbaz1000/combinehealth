@@ -1,10 +1,14 @@
 """
-Input guardrails — validate user messages before they enter the RAG pipeline.
+Guardrails — input validation and retrieval quality checks.
 
-Current checks:
+Input checks (check_input):
   1. Empty/whitespace (backend safety net — frontend also disables send button)
   2. Length limit (2000 chars)
   3. PII detection (SSN, credit card, phone, email via regex)
+
+Retrieval checks (check_retrieval):
+  1. Score threshold — drop chunks below RETRIEVAL_SCORE_THRESHOLD
+  2. Confidence tier — "high", "low", or "none" based on best surviving score
 
 Prompt injection detection is intentionally omitted. See docs/design-decisions.md
 for full rationale.
@@ -61,3 +65,37 @@ def check_input(text: str) -> tuple[bool, str]:
             )
 
     return True, ""
+
+
+# ── Retrieval guardrails ─────────────────────────────────────────────────
+
+from app.config import RETRIEVAL_SCORE_THRESHOLD, RETRIEVAL_LOW_CONFIDENCE_THRESHOLD
+
+
+def check_retrieval(chunks: list[dict]) -> tuple[list[dict], str]:
+    """
+    Filter retrieved chunks by score and assign a confidence tier.
+
+    Three tiers drive different LLM prompt augmentations in rag.py:
+      - "high"  — best chunk >= LOW_CONFIDENCE_THRESHOLD (normal RAG)
+      - "low"   — chunks survived but best < LOW_CONFIDENCE_THRESHOLD
+      - "none"  — zero chunks above SCORE_THRESHOLD
+
+    The LLM is ALWAYS called regardless of tier — it just gets different
+    instructions. See docs/design-decisions.md DD-4 for rationale.
+
+    Returns:
+        (filtered_chunks, confidence) where confidence is "high"|"low"|"none"
+    """
+    # Drop chunks below the minimum score threshold
+    filtered = [c for c in chunks if c.get("score", 0) >= RETRIEVAL_SCORE_THRESHOLD]
+
+    if not filtered:
+        return [], "none"
+
+    best_score = max(c.get("score", 0) for c in filtered)
+
+    if best_score >= RETRIEVAL_LOW_CONFIDENCE_THRESHOLD:
+        return filtered, "high"
+
+    return filtered, "low"
