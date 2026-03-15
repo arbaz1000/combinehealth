@@ -91,10 +91,10 @@ class AskResponse(BaseModel):
 @app.post("/ask", response_model=AskResponse)
 async def ask_endpoint(req: AskRequest):
     """Ask a question about UHC insurance policies."""
-    # Input guardrails — reject bad input before hitting the RAG pipeline
-    ok, error_msg = check_input(req.question)
+    # Input guardrails — reject empty/too-long, redact PII
+    ok, sanitized, _redacted = check_input(req.question)
     if not ok:
-        return JSONResponse(status_code=422, content={"detail": error_msg})
+        return JSONResponse(status_code=422, content={"detail": sanitized})
 
     # Convert chat_history from Pydantic models to dicts for the pipeline
     history = [msg.model_dump() for msg in req.chat_history] if req.chat_history else None
@@ -104,7 +104,7 @@ async def ask_endpoint(req: AskRequest):
         None,
         partial(
             ask,
-            req.question,
+            sanitized,
             openai_client=openai_client,
             qdrant_client=qdrant_client,
             chat_history=history,
@@ -116,16 +116,16 @@ async def ask_endpoint(req: AskRequest):
 @app.post("/ask/stream")
 async def ask_stream_endpoint(req: AskRequest):
     """Stream a response about UHC insurance policies via SSE."""
-    # Input guardrails — same as /ask
-    ok, error_msg = check_input(req.question)
+    # Input guardrails — reject empty/too-long, redact PII
+    ok, sanitized, _redacted = check_input(req.question)
     if not ok:
-        return JSONResponse(status_code=422, content={"detail": error_msg})
+        return JSONResponse(status_code=422, content={"detail": sanitized})
 
     history = [msg.model_dump() for msg in req.chat_history] if req.chat_history else None
 
     return StreamingResponse(
         ask_stream(
-            req.question,
+            sanitized,
             openai_client=openai_client,
             qdrant_client=qdrant_client,
             chat_history=history,

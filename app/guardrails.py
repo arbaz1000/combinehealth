@@ -16,9 +16,6 @@ for full rationale.
 
 import re
 
-# ── Config ────────────────────────────────────────────────────────────────
-MAX_INPUT_LENGTH = 2000
-
 # ── PII patterns ──────────────────────────────────────────────────────────
 # Best-effort regex detection for common PII formats.
 #
@@ -40,31 +37,38 @@ PII_PATTERNS = {
 }
 
 
-def check_input(text: str) -> tuple[bool, str]:
+def redact_pii(text: str) -> tuple[str, list[str]]:
     """
-    Validate user input before processing.
+    Replace detected PII with [REDACTED].
 
     Returns:
-        (True, "")           — input is safe to process
-        (False, error_msg)   — input rejected, error_msg is user-friendly
+        (sanitized_text, list_of_redacted_types)
+        e.g. ("My SSN is [REDACTED]", ["Social Security Number"])
+    """
+    redacted_types = []
+    for pii_type, pattern in PII_PATTERNS.items():
+        if pattern.search(text):
+            text = pattern.sub("[REDACTED]", text)
+            redacted_types.append(pii_type)
+    return text, redacted_types
+
+
+def check_input(text: str) -> tuple[bool, str, list[str]]:
+    """
+    Validate and sanitize user input before processing.
+
+    Returns:
+        (True, sanitized_text, redacted_types)  — input safe, PII redacted if any
+        (False, error_msg, [])                  — input rejected (empty/too long)
     """
     # 1. Empty / whitespace (backend safety net — UI disables send button too)
     if not text or not text.strip():
-        return False, "Please enter a question."
+        return False, "Please enter a question.", []
 
-    # 2. Length limit
-    if len(text) > MAX_INPUT_LENGTH:
-        return False, f"Your message is too long ({len(text)} characters). Please keep it under {MAX_INPUT_LENGTH} characters."
+    # 2. PII redaction (sanitize, don't reject)
+    sanitized, redacted_types = redact_pii(text)
 
-    # 3. PII detection
-    for pii_type, pattern in PII_PATTERNS.items():
-        if pattern.search(text):
-            return False, (
-                f"It looks like your message contains a {pii_type}. "
-                "Please remove any personal information before sending."
-            )
-
-    return True, ""
+    return True, sanitized, redacted_types
 
 
 # ── Retrieval guardrails ─────────────────────────────────────────────────

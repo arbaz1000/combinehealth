@@ -297,19 +297,40 @@ def test_stream_off_topic(mock_classify):
 # ── API endpoint ─────────────────────────────────────────────────────────
 
 def test_stream_endpoint_input_guardrail():
-    """The /ask/stream endpoint should reject bad input with 422."""
+    """The /ask/stream endpoint should reject empty/too-long input with 422.
+    PII is redacted (not rejected), so SSN input returns 200."""
     from fastapi.testclient import TestClient
     from app.api import app
+    import app.api as api_module
 
-    client = TestClient(app)
+    # Mock global clients to avoid Qdrant lock
+    api_module.qdrant_client = MagicMock()
+    api_module.openai_client = MagicMock()
 
-    # Empty question
-    resp = client.post("/ask/stream", json={"question": ""})
-    assert resp.status_code == 422
+    try:
+        client = TestClient(app, raise_server_exceptions=True)
 
-    # PII (SSN)
-    resp = client.post("/ask/stream", json={"question": "My SSN is 123-45-6789"})
-    assert resp.status_code == 422
+        # Empty question → still rejected
+        resp = client.post("/ask/stream", json={"question": ""})
+        assert resp.status_code == 422
+
+        # PII (SSN) → redacted and processed, not rejected
+        with patch("app.api.ask_stream") as mock_ask_stream:
+            mock_ask_stream.return_value = iter([
+                _sse_event({"type": "intent", "intent": "policy_query", "rewritten_query": None}),
+                _sse_event({"type": "token", "content": "Redacted query processed."}),
+                _sse_event({"type": "sources", "sources": []}),
+                _sse_event({"type": "done"}),
+            ])
+            resp = client.post("/ask/stream", json={"question": "My SSN is 123-45-6789"})
+            assert resp.status_code == 200
+            # Verify ask_stream received the redacted text
+            call_args = mock_ask_stream.call_args
+            assert "123-45-6789" not in call_args[0][0]
+            assert "[REDACTED]" in call_args[0][0]
+    finally:
+        api_module.qdrant_client = None
+        api_module.openai_client = None
 
 
 def test_stream_endpoint_returns_event_stream():
