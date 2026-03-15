@@ -16,10 +16,10 @@ from functools import partial
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from app.rag import ask, get_qdrant_client, get_openai_client
+from app.rag import ask, ask_stream, get_qdrant_client, get_openai_client
 from app.cost_tracker import get_summary
 from app.guardrails import check_input
 
@@ -111,6 +111,27 @@ async def ask_endpoint(req: AskRequest):
         ),
     )
     return AskResponse(**result)
+
+
+@app.post("/ask/stream")
+async def ask_stream_endpoint(req: AskRequest):
+    """Stream a response about UHC insurance policies via SSE."""
+    # Input guardrails — same as /ask
+    ok, error_msg = check_input(req.question)
+    if not ok:
+        return JSONResponse(status_code=422, content={"detail": error_msg})
+
+    history = [msg.model_dump() for msg in req.chat_history] if req.chat_history else None
+
+    return StreamingResponse(
+        ask_stream(
+            req.question,
+            openai_client=openai_client,
+            qdrant_client=qdrant_client,
+            chat_history=history,
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @app.get("/health")

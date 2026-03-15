@@ -10,6 +10,8 @@ Simple mental model:
 All OpenAI calls (embedding + LLM) are cost-tracked automatically.
 """
 
+import json
+
 from openai import OpenAI
 from qdrant_client import QdrantClient, models
 
@@ -207,6 +209,58 @@ def build_sources(chunks: list[dict]) -> list[dict]:
     return sources
 
 
+def generate_answer_stream(
+    question: str,
+    context: str,
+    client: OpenAI,
+    chat_history: list[dict] | None = None,
+    retrieval_confidence: str = "high",
+):
+    """
+    Stream GPT-4o-mini response token-by-token. Cost-tracked.
+
+    Yields individual token strings as they arrive from the OpenAI API.
+    Uses stream_options={"include_usage": True} so the final chunk
+    contains token counts for cost tracking (no manual counting needed).
+    """
+    if retrieval_confidence == "none":
+        user_prompt = USER_PROMPT_NO_CONTEXT.format(question=question)
+    elif retrieval_confidence == "low":
+        user_prompt = USER_PROMPT_LOW_CONFIDENCE.format(context=context, question=question)
+    else:
+        user_prompt = USER_PROMPT_HIGH_CONFIDENCE.format(context=context, question=question)
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    if chat_history:
+        messages.extend(chat_history)
+
+    messages.append({"role": "user", "content": user_prompt})
+
+    stream = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=messages,
+        temperature=LLM_TEMPERATURE,
+        max_tokens=LLM_MAX_TOKENS,
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+
+    for chunk in stream:
+        # Final chunk carries usage stats (content is None)
+        if chunk.usage is not None:
+            log_call(
+                call_type="chat_completion",
+                model=LLM_MODEL,
+                input_tokens=chunk.usage.prompt_tokens,
+                output_tokens=chunk.usage.completion_tokens,
+                metadata={"question": question[:200], "streaming": True},
+            )
+
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+
 def generate_answer(
     question: str,
     context: str,
@@ -328,3 +382,81 @@ def ask(
         "rewritten_query": classification["rewritten_query"],
         "retrieval_confidence": confidence,
     }
+
+
+def _sse_event(data: dict) -> str:
+    """Format a dict as an SSE data line."""
+    return f"data: {json.dumps(data)}\n\n"
+
+
+def ask_stream(
+    question: str,
+    openai_client: OpenAI | None = None,
+    qdrant_client: QdrantClient | None = None,
+    chat_history: list[dict] | None = None,
+):
+    """
+    Streaming RAG pipeline — yields SSE-formatted events.
+
+    All intent types (greeting, off_topic, policy_query, follow_up) flow
+    through the same SSE interface for frontend consistency.
+
+    Event sequence:
+      1. {"type": "intent", "intent": "...", "rewritten_query": "..."}
+      2. {"type": "token", "content": "..."}  (one per token/word)
+      3. {"type": "sources", "sources": [...]}
+      4. {"type": "done"}
+    """
+    oai = openai_client or get_openai_client()
+    qd = qdrant_client or get_qdrant_client()
+
+    # 0. Sanitize and truncate history
+    history = sanitize_history(chat_history)
+    history = truncate_history(history)
+
+    # 1. Classify intent + rewrite if needed
+    classification = classify_intent(question, history, openai_client=oai)
+    intent = classification["intent"]
+
+    # Send intent event
+    yield _sse_event({
+        "type": "intent",
+        "intent": intent,
+        "rewritten_query": classification.get("rewritten_query"),
+    })
+
+    # 2. For greeting/off_topic — stream canned response word-by-word
+    if intent in ("greeting", "off_topic"):
+        words = classification["response"].split()
+        for i, word in enumerate(words):
+            # Add trailing space except for last word
+            token = word if i == len(words) - 1 else word + " "
+            yield _sse_event({"type": "token", "content": token})
+        yield _sse_event({"type": "sources", "sources": []})
+        yield _sse_event({"type": "done"})
+        return
+
+    # 3. Use rewritten query for retrieval
+    search_query = classification["rewritten_query"] or question
+    raw_chunks = retrieve(search_query, oai, qd)
+
+    # 4. Retrieval guardrails
+    chunks, confidence = check_retrieval(raw_chunks)
+
+    # 5. Build context
+    context = build_context(chunks) if chunks else ""
+
+    # 6. Stream answer token-by-token from LLM
+    for token in generate_answer_stream(
+        question, context, oai,
+        chat_history=history,
+        retrieval_confidence=confidence,
+    ):
+        yield _sse_event({"type": "token", "content": token})
+
+    # 7. Send sources
+    sources = build_sources(chunks)
+    yield _sse_event({"type": "sources", "sources": sources})
+
+    # 8. Done
+    yield _sse_event({"type": "done"})
