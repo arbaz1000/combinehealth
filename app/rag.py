@@ -28,7 +28,7 @@ from app.config import (
 )
 from app.cost_tracker import log_call
 from app.classifier import classify_intent
-from app.guardrails import check_retrieval
+from app.guardrails import check_retrieval, check_output
 
 # ── System prompt ──────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an expert insurance policy assistant for doctors and clinic staff.
@@ -371,7 +371,10 @@ def ask(
         retrieval_confidence=confidence,
     )
 
-    # 7. Extract sources (only from chunks that survived filtering)
+    # 7. Output guardrails — disclaimer, hallucination flag, off-topic scan
+    answer = check_output(answer, chunks)
+
+    # 8. Extract sources (only from chunks that survived filtering)
     sources = build_sources(chunks)
 
     return {
@@ -446,17 +449,26 @@ def ask_stream(
     # 5. Build context
     context = build_context(chunks) if chunks else ""
 
-    # 6. Stream answer token-by-token from LLM
+    # 6. Stream answer token-by-token from LLM, accumulate for output guardrails
+    accumulated_answer = []
     for token in generate_answer_stream(
         question, context, oai,
         chat_history=history,
         retrieval_confidence=confidence,
     ):
+        accumulated_answer.append(token)
         yield _sse_event({"type": "token", "content": token})
 
-    # 7. Send sources
+    # 7. Output guardrails — run on full answer, stream any appended text
+    raw_answer = "".join(accumulated_answer)
+    checked_answer = check_output(raw_answer, chunks)
+    appended_text = checked_answer[len(raw_answer):]
+    if appended_text:
+        yield _sse_event({"type": "token", "content": appended_text})
+
+    # 8. Send sources
     sources = build_sources(chunks)
     yield _sse_event({"type": "sources", "sources": sources})
 
-    # 8. Done
+    # 9. Done
     yield _sse_event({"type": "done"})

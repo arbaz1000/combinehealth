@@ -196,10 +196,11 @@ def test_stream_policy_query_tokens(mock_gen_stream, mock_retrieve, mock_classif
     assert events[0]["intent"] == "policy_query"
     assert events[0]["rewritten_query"] == "Is ablation covered?"
 
-    # Check tokens
+    # Check tokens — includes output guardrail disclaimer appended after LLM tokens
     token_events = [e for e in events if e["type"] == "token"]
     full = "".join(e["content"] for e in token_events)
-    assert full == "Yes, ablation is covered."
+    assert full.startswith("Yes, ablation is covered.")
+    assert "This information is for reference only" in full
 
     # Check sources
     sources_event = [e for e in events if e["type"] == "sources"][0]
@@ -258,7 +259,8 @@ def test_stream_no_retrieval_results(mock_gen_stream, mock_retrieve, mock_classi
 
     token_events = [e for e in events if e["type"] == "token"]
     full = "".join(e["content"] for e in token_events)
-    assert "No matching policy found." == full
+    assert full.startswith("No matching policy found.")
+    assert "This information is for reference only" in full
 
     # Sources should be empty
     sources_event = [e for e in events if e["type"] == "sources"][0]

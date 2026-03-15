@@ -106,3 +106,38 @@ This document captures product and design reasoning behind decisions that aren't
 - **Chunk-level LLM relevance scoring.** Ask the LLM to grade each chunk's relevance before generation. Expensive but highest accuracy.
 
 ---
+
+## DD-5: Output Guardrails — Lightweight Post-Hoc Checks, Not a Separate LLM Call
+
+**Date:** 2026-03-16
+
+**Decision:** Implement output guardrails as deterministic post-processing (regex + string matching) rather than an LLM-as-judge or NLI-based faithfulness check.
+
+**Context:** After researching state-of-the-art output guardrail practices for RAG systems in healthcare/insurance, we evaluated the full spectrum: static disclaimers, regex-based hallucination detection, NLI-based entailment checks, LLM-as-judge faithfulness scoring, and off-topic leak detection.
+
+**What we implement (three checks):**
+
+| Check | Method | Cost | Latency |
+|---|---|---|---|
+| **Medical disclaimer** | Static text appended to every policy answer (italic, double-newline separated) | Zero | Zero |
+| **Hallucination flag** | Regex extracts policy numbers from answer, compares against retrieved chunks' metadata | Zero | <1ms |
+| **Off-topic leak detection** | Curated regex patterns for prescriptive, diagnostic, legal, and financial language | Zero | <1ms |
+
+**Rationale:**
+
+1. **Trusted user base reduces threat surface.** Doctors and clinic staff are not adversarial users. The primary risk is GPT-4o-mini being overly helpful (drifting into medical advice, financial recommendations), not deliberate prompt injection. Lightweight regex catches this drift.
+
+2. **Closed-book enforcement is the primary defense.** The system prompt and tiered prompts (DD-4) explicitly forbid the LLM from using internal knowledge. Output guardrails are a safety net, not the primary control. This mirrors the defense-in-depth principle from DD-1 (prompt injection).
+
+3. **NLI adds latency and complexity for marginal benefit at this stage.** Encoder-based NLI (e.g., cross-encoder/nli-deberta-v3-small) achieves ~91% F1 but adds ~486ms per request. For an internal tool where the LLM is already constrained to retrieved context, the incremental value doesn't justify the latency. Regex-based policy number checking catches the most obvious hallucination class (citing non-retrieved policies) at zero cost.
+
+4. **Off-topic patterns are curated, not exhaustive.** GPT-4o-mini tends to be more helpful and less conservative than GPT-4. The pattern list targets specific language classes: prescriptive medical advice ("you should see", "I recommend you start"), financial advice ("invest", "your portfolio"), legal advice ("hire an attorney", "file a lawsuit"), and diagnostic language ("you likely have", "I would diagnose"). One warning per response avoids clutter.
+
+5. **Disclaimer is standard practice.** Static disclaimers appear consistently in production healthcare/insurance AI deployments (AWS, NVIDIA reference architectures). For a tool that informs coverage decisions, this is a liability shield, not just UX.
+
+**Production extensions (when to revisit):**
+- **NLI faithfulness check.** Add as part of evaluation framework (Block 9) for async quality monitoring, not inline. Sample 20-30% of production traffic with GPT-4o faithfulness scoring for systematic error detection.
+- **Adaptive off-topic patterns.** If false positives emerge from the regex list (e.g., legitimate insurance language triggering warnings), refine patterns or move to a lightweight classifier.
+- **Per-response confidence display.** Show "high confidence" vs. "partially supported" inline, based on retrieval tier + NLI score. Helps staff calibrate trust.
+
+---

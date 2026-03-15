@@ -1,14 +1,18 @@
 """
-Guardrails — input validation and retrieval quality checks.
+Guardrails — input validation, retrieval quality checks, and output checks.
 
 Input checks (check_input):
   1. Empty/whitespace (backend safety net — frontend also disables send button)
-  2. Length limit (2000 chars)
-  3. PII detection (SSN, credit card, phone, email via regex)
+  2. PII detection (SSN, credit card, phone, email via regex → redacted)
 
 Retrieval checks (check_retrieval):
   1. Score threshold — drop chunks below RETRIEVAL_SCORE_THRESHOLD
   2. Confidence tier — "high", "low", or "none" based on best surviving score
+
+Output checks (check_output):
+  1. Medical disclaimer — appended to every policy answer (italic, double newline)
+  2. Hallucination flag — policy numbers in answer not present in retrieved chunks
+  3. Off-topic leak detection — prescriptive/diagnosis/legal/financial language
 
 Prompt injection detection is intentionally omitted. See docs/design-decisions.md
 for full rationale.
@@ -103,3 +107,83 @@ def check_retrieval(chunks: list[dict]) -> tuple[list[dict], str]:
         return filtered, "high"
 
     return filtered, "low"
+
+
+# ── Output guardrails ──────────────────────────────────────────────────
+
+MEDICAL_DISCLAIMER = (
+    "\n\n*This information is for reference only. "
+    "Verify with UHC directly before making coverage decisions.*"
+)
+
+# Regex to extract policy numbers from LLM answers.
+# UHC policy numbers follow patterns like 2024T0538456, 2023T0612, etc.
+POLICY_NUMBER_PATTERN = re.compile(r"\b(\d{4}T\d{4,})\b")
+
+# ── Off-topic leak patterns ────────────────────────────────────────────
+# Curated trigger phrases for detecting when GPT-4o-mini drifts into
+# prescriptive, diagnostic, legal, or financial advice territory.
+# GPT-4o-mini tends to be more helpful and less conservative than GPT-4,
+# so this is a warranted lightweight check. See docs/design-decisions.md DD-5.
+
+OFF_TOPIC_PATTERNS = [
+    # Medical diagnosis / prescriptive language
+    re.compile(r"\byou (?:likely |probably |may )?have\b", re.IGNORECASE),
+    re.compile(r"\bI (?:would )?diagnose\b", re.IGNORECASE),
+    re.compile(r"\byou should (?:see|visit|consult|seek|go to)\b", re.IGNORECASE),
+    re.compile(r"\bseek (?:immediate |emergency )?medical (?:attention|help|care)\b", re.IGNORECASE),
+    re.compile(r"\bthis (?:would be |is )my (?:recommendation|diagnosis)\b", re.IGNORECASE),
+    re.compile(r"\bI recommend (?:you |that you )?(?:take|start|stop|avoid|try)\b", re.IGNORECASE),
+    re.compile(r"\byou need to (?:take|start|stop|see|visit)\b", re.IGNORECASE),
+    # Financial advice
+    re.compile(r"\b(?:you should |I recommend you )?invest\b", re.IGNORECASE),
+    re.compile(r"\byour (?:stock|portfolio|retirement|savings)\b", re.IGNORECASE),
+    re.compile(r"\bfinancial advice\b", re.IGNORECASE),
+    # Legal advice
+    re.compile(r"\blegal advice\b", re.IGNORECASE),
+    re.compile(r"\b(?:you should |I recommend you )?(?:hire|consult|retain) an? (?:attorney|lawyer)\b", re.IGNORECASE),
+    re.compile(r"\byou (?:could |should |may want to )?(?:file a |bring a )?lawsuit\b", re.IGNORECASE),
+    re.compile(r"\byou have (?:a |the )?(?:legal |)right to sue\b", re.IGNORECASE),
+]
+
+OFFTOPIC_WARNING = (
+    "\n\n*Warning: This response may contain advice outside the scope of "
+    "insurance policy information. Please consult the appropriate professional.*"
+)
+
+HALLUCINATION_WARNING = (
+    "\n\n*Note: This response references policy number(s) not found in the "
+    "retrieved sources. Please verify independently.*"
+)
+
+
+def check_output(answer: str, chunks: list[dict]) -> str:
+    """
+    Post-process LLM answer: append disclaimer, flag hallucinated policy
+    numbers, and detect off-topic drift.
+
+    Applied only to policy answers (greeting/off_topic skip this).
+
+    Returns the answer with any appended warnings/disclaimer.
+    """
+    warnings = []
+
+    # 1. Hallucination flag — policy numbers in answer not in retrieved chunks
+    retrieved_policy_numbers = {
+        c.get("policy_number", "") for c in chunks if c.get("policy_number")
+    }
+    mentioned_policy_numbers = set(POLICY_NUMBER_PATTERN.findall(answer))
+    hallucinated = mentioned_policy_numbers - retrieved_policy_numbers
+    if hallucinated:
+        warnings.append(HALLUCINATION_WARNING)
+
+    # 2. Off-topic leak detection
+    for pattern in OFF_TOPIC_PATTERNS:
+        if pattern.search(answer):
+            warnings.append(OFFTOPIC_WARNING)
+            break  # one warning is enough
+
+    # 3. Medical disclaimer — always last
+    warnings.append(MEDICAL_DISCLAIMER)
+
+    return answer + "".join(warnings)
