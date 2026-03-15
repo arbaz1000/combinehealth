@@ -24,6 +24,7 @@ from app.config import (
     TOP_K,
 )
 from app.cost_tracker import log_call
+from app.classifier import classify_intent
 
 # ── System prompt ──────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an expert insurance policy assistant for doctors and clinic staff.
@@ -151,41 +152,67 @@ def generate_answer(question: str, context: str, client: OpenAI) -> str:
     return response.choices[0].message.content
 
 
-def ask(question: str, openai_client: OpenAI | None = None, qdrant_client: QdrantClient | None = None) -> dict:
+def ask(
+    question: str,
+    openai_client: OpenAI | None = None,
+    qdrant_client: QdrantClient | None = None,
+    chat_history: list[dict] | None = None,
+) -> dict:
     """
-    Full RAG pipeline: embed query → retrieve → build context → generate answer.
+    Full RAG pipeline: classify → (rewrite) → retrieve → generate answer.
 
     Returns:
         {
             "answer": "...",
-            "sources": [{"policy_name": ..., "policy_number": ..., "source_url": ...}],
+            "sources": [...],
             "chunks_used": int,
+            "intent": "greeting" | "off_topic" | "policy_query" | "follow_up",
+            "rewritten_query": str | None,
         }
     """
     oai = openai_client or get_openai_client()
     qd = qdrant_client or get_qdrant_client()
 
-    # 1. Retrieve relevant chunks
-    chunks = retrieve(question, oai, qd)
+    # 1. Classify intent + rewrite if needed
+    classification = classify_intent(question, chat_history, openai_client=oai)
+    intent = classification["intent"]
+
+    # 2. For greeting/off_topic — return direct response, skip retrieval
+    if intent in ("greeting", "off_topic"):
+        return {
+            "answer": classification["response"],
+            "sources": [],
+            "chunks_used": 0,
+            "intent": intent,
+            "rewritten_query": None,
+        }
+
+    # 3. Use rewritten query for retrieval (important for follow-ups)
+    search_query = classification["rewritten_query"] or question
+    chunks = retrieve(search_query, oai, qd)
 
     if not chunks:
         return {
             "answer": "I couldn't find any relevant policy information for your question. Please try rephrasing or ask about a specific procedure, diagnosis, or CPT code.",
             "sources": [],
             "chunks_used": 0,
+            "intent": intent,
+            "rewritten_query": classification["rewritten_query"],
         }
 
-    # 2. Build context from retrieved chunks
+    # 4. Build context from retrieved chunks
     context = build_context(chunks)
 
-    # 3. Generate answer
+    # 5. Generate answer
     answer = generate_answer(question, context, oai)
 
-    # 4. Extract sources
+    # 6. Extract sources
     sources = build_sources(chunks)
 
     return {
         "answer": answer,
         "sources": sources,
         "chunks_used": len(chunks),
+        "intent": intent,
+        "rewritten_query": classification["rewritten_query"],
     }

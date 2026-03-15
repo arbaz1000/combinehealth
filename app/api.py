@@ -55,13 +55,20 @@ app.add_middleware(
 
 
 # ── Request/Response models ────────────────────────────────────────────
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
 class AskRequest(BaseModel):
     question: str
+    chat_history: list[ChatMessage] = []
 
     class Config:
         json_schema_extra = {
             "example": {
-                "question": "Is spinal ablation covered under UHC commercial plans?"
+                "question": "Is spinal ablation covered under UHC commercial plans?",
+                "chat_history": [],
             }
         }
 
@@ -76,6 +83,8 @@ class AskResponse(BaseModel):
     answer: str
     sources: list[Source]
     chunks_used: int
+    intent: str
+    rewritten_query: str | None = None
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────
@@ -87,9 +96,19 @@ async def ask_endpoint(req: AskRequest):
     if not ok:
         return JSONResponse(status_code=422, content={"detail": error_msg})
 
+    # Convert chat_history from Pydantic models to dicts for the pipeline
+    history = [msg.model_dump() for msg in req.chat_history] if req.chat_history else None
+
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
-        None, partial(ask, req.question, openai_client=openai_client, qdrant_client=qdrant_client)
+        None,
+        partial(
+            ask,
+            req.question,
+            openai_client=openai_client,
+            qdrant_client=qdrant_client,
+            chat_history=history,
+        ),
     )
     return AskResponse(**result)
 
