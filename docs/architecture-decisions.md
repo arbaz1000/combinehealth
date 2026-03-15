@@ -87,3 +87,81 @@ This document captures key design decisions, the options we considered, and why 
 - Combined with BM25 sparse vectors for hybrid search, overall retrieval quality is strong
 
 **Trade-off:** OpenAI's embedding model may be slightly better on domain-specific medical text. If retrieval quality is poor, switching to OpenAI embeddings is a one-line config change.
+
+---
+
+## ADR-5: Streaming — Unified SSE Event Protocol
+
+**Date:** 2026-03-16
+
+**Context:** The chatbot needs to stream LLM responses token-by-token to the frontend. We needed to decide (a) the streaming transport and (b) whether non-policy responses (greetings, off-topic) should also stream.
+
+**Decision:** Use Server-Sent Events (SSE) via FastAPI `StreamingResponse` with a unified event protocol for all intent types.
+
+**Event sequence:**
+```
+1. {"type": "intent",  "intent": "...", "rewritten_query": "..."}
+2. {"type": "token",   "content": "..."}   ← repeated per token/word
+3. {"type": "sources", "sources": [...]}
+4. {"type": "done"}
+```
+
+**Why unified streaming for all intents?**
+- **Frontend simplicity.** One SSE parsing path handles every response type. No conditional logic to switch between streaming and non-streaming code paths.
+- **Consistent UX.** Canned responses (greeting/off-topic) stream word-by-word, matching the visual rhythm of LLM-generated answers. Without this, greetings would pop in instantly while policy answers would stream — a jarring inconsistency.
+- **Extensibility.** If we later make greetings LLM-generated (for personalization), no frontend changes are needed.
+
+**Why SSE over WebSockets?**
+- SSE is simpler — it's HTTP, works with standard proxies/load balancers, and auto-reconnects.
+- We only need server→client streaming. WebSockets add bidirectional complexity we don't need.
+- The non-streaming `POST /ask` endpoint remains as a JSON fallback for simple integrations.
+
+---
+
+## ADR-6: Async-First — AsyncOpenAI with Native Await
+
+**Date:** 2026-03-16
+
+**Context:** The original implementation used the synchronous `OpenAI` client. FastAPI ran these calls via `run_in_executor()` to avoid blocking the event loop. This worked but was suboptimal.
+
+**Decision:** Convert all OpenAI calls to use `AsyncOpenAI`. FastAPI endpoints `await` the pipeline directly — no executor needed.
+
+**Rationale:**
+- **Concurrency.** Sync OpenAI calls in an executor each consume a thread from the default `ThreadPoolExecutor` (max ~40 threads). Under load, this becomes a bottleneck. Async calls use the event loop natively — thousands of concurrent requests share a single thread.
+- **Streaming compatibility.** `AsyncOpenAI` returns `AsyncGenerator` for streamed completions, which integrates naturally with FastAPI's `StreamingResponse`. The sync client's stream would need threading hacks.
+- **Simpler code.** `await client.chat.completions.create(...)` is cleaner than `await asyncio.get_event_loop().run_in_executor(None, sync_call)`.
+- **Test alignment.** `pytest-asyncio` + `AsyncMock` test async functions directly, without the indirection of mocking executors.
+
+**What changed:**
+- `openai.OpenAI` → `openai.AsyncOpenAI` in `rag.py`
+- `classify_intent()` in `classifier.py` became `async def`
+- All `client.chat.completions.create()` calls use `await`
+- API endpoints call `await ask(...)` directly instead of wrapping in `run_in_executor`
+- All tests updated to `@pytest.mark.asyncio` with `AsyncMock`
+
+---
+
+## ADR-7: Two-Tier Intent Classification
+
+**Date:** 2026-03-16
+
+**Context:** Every user message needs to be classified as a greeting, off-topic query, policy question, or follow-up. We needed to decide between (a) always calling the LLM, (b) always using regex, or (c) a hybrid approach.
+
+**Decision:** Two-tier classification — regex first, LLM fallback.
+
+**Tier 1 (regex, ~0ms, $0):**
+- Catches obvious greetings ("hi", "hello", "hey"), thanks ("thanks", "ty"), and goodbyes ("bye", "take care")
+- Patterns are intentionally conservative — they only match exact, unambiguous patterns
+- Returns a canned response immediately, no API call
+
+**Tier 2 (GPT-4o-mini, ~200ms, ~$0.0001):**
+- Handles everything regex doesn't catch
+- Classifies into `greeting`, `off_topic`, `policy_query`, or `follow_up`
+- For `follow_up`: rewrites the query into a standalone question using chat history
+- Uses JSON mode for structured output
+
+**Rationale:**
+- **Cost savings.** ~30% of messages in a typical session are greetings/thanks. Regex handles these at zero cost.
+- **Latency.** Tier 1 responses are instant. Users get immediate feedback for casual messages.
+- **Accuracy.** Regex is 100% accurate on the patterns it covers. The LLM handles the ambiguous cases where regex would produce false positives (e.g., "Hi, is ablation covered?" is not a pure greeting — it needs Tier 2).
+- **Safety.** When Tier 2 can't parse the LLM's JSON response, it defaults to `policy_query` — never blocks the user.
