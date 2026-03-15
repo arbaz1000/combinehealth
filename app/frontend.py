@@ -32,11 +32,11 @@ EXAMPLES = [
     "Is cosmetic rhinoplasty covered?",
 ]
 
-# Show examples in sidebar
+# Show examples in sidebar (disabled while a response is being generated)
 with st.sidebar:
     st.header("Example Questions")
     for example in EXAMPLES:
-        if st.button(example, key=example, use_container_width=True):
+        if st.button(example, key=example, use_container_width=True, disabled=st.session_state.processing):
             st.session_state["prefill_question"] = example
 
     st.divider()
@@ -52,6 +52,8 @@ with st.sidebar:
 # ── Chat history ───────────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "processing" not in st.session_state:
+    st.session_state.processing = False
 
 # Display chat history
 for msg in st.session_state.messages:
@@ -79,13 +81,23 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
+    # Build chat_history for the API (role + content only, no sources/metadata)
+    chat_history = [
+        {"role": msg["role"], "content": msg["content"]}
+        for msg in st.session_state.messages
+        if msg["role"] in ("user", "assistant")
+    ]
+    # Exclude the message we just appended (it's the current question, not history)
+    chat_history = chat_history[:-1]
+
     # Call API and display response
     with st.chat_message("assistant"):
+        st.session_state.processing = True
         with st.spinner("Searching policies..."):
             try:
                 resp = requests.post(
                     f"{API_URL}/ask",
-                    json={"question": question},
+                    json={"question": question, "chat_history": chat_history},
                     timeout=30,
                 )
 
@@ -94,6 +106,7 @@ if question:
                     detail = resp.json().get("detail", "Invalid input.")
                     st.warning(detail)
                     st.session_state.messages.append({"role": "assistant", "content": detail})
+                    st.session_state.processing = False
                     st.rerun()
 
                 resp.raise_for_status()
@@ -129,3 +142,5 @@ if question:
                 err = f"⚠️ Error: {str(e)}"
                 st.error(err)
                 st.session_state.messages.append({"role": "assistant", "content": err})
+            finally:
+                st.session_state.processing = False

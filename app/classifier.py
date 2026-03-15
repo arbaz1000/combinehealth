@@ -121,7 +121,10 @@ def _build_classifier_messages(
     history_text = "No prior conversation."
     if chat_history:
         pairs = []
-        for msg in chat_history[-10:]:  # last 5 turn-pairs max
+        # Last 5 turn-pairs (10 messages). History is already truncated
+        # by rag.truncate_history() before reaching here, but we cap again
+        # defensively. See docs/design-decisions.md DD-3 for rationale.
+        for msg in chat_history[-10:]:
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
             pairs.append(f"{role}: {content}")

@@ -39,6 +39,12 @@ LLM_MAX_TOKENS = 1024
 # ── RAG settings ──────────────────────────────────────────────────────
 TOP_K = 8  # number of chunks to retrieve
 
+# ── Conversation settings ─────────────────────────────────────────────
+# Max turn-pairs (user+assistant) to include in LLM context.
+# 5 pairs = 10 messages. Increase for longer context at higher token cost.
+# In production, consider token-budget-based truncation or summarization.
+MAX_HISTORY_TURNS = 5
+
 
 @lru_cache()
 def load_insurer_config(insurer: str = "uhc") -> dict:

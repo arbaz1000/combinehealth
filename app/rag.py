@@ -22,6 +22,7 @@ from app.config import (
     LLM_TEMPERATURE,
     LLM_MAX_TOKENS,
     TOP_K,
+    MAX_HISTORY_TURNS,
 )
 from app.cost_tracker import log_call
 from app.classifier import classify_intent
@@ -50,6 +51,50 @@ USER_PROMPT_TEMPLATE = """Based on the following UHC policy excerpts, answer the
 User question: {question}
 
 Provide a clear, structured answer with policy citations."""
+
+
+# ── History helpers ────────────────────────────────────────────────────
+
+def sanitize_history(history: list[dict] | None) -> list[dict]:
+    """
+    Clean up chat history for safe use in LLM messages.
+
+    Handles edge cases like consecutive same-role messages (e.g. user sent
+    two messages before getting a response) by merging them into one.
+    Strips any extra fields (sources, metadata) — keeps only role + content.
+    """
+    if not history:
+        return []
+
+    cleaned = []
+    for msg in history:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role not in ("user", "assistant") or not content.strip():
+            continue
+        # Merge consecutive same-role messages
+        if cleaned and cleaned[-1]["role"] == role:
+            cleaned[-1]["content"] += "\n" + content
+        else:
+            cleaned.append({"role": role, "content": content})
+    return cleaned
+
+
+def truncate_history(history: list[dict], max_turns: int = MAX_HISTORY_TURNS) -> list[dict]:
+    """
+    Keep the last N turn-pairs from history.
+
+    A turn-pair is one user message + one assistant message (2 items).
+    Truncates from the front to preserve the most recent context.
+
+    Note: 5 turn-pairs (10 messages) is a pragmatic default that balances
+    context quality vs. token cost. In production, consider token-budget-based
+    truncation or summarizing older turns. See docs/design-decisions.md DD-3.
+    """
+    max_messages = max_turns * 2
+    if len(history) <= max_messages:
+        return history
+    return history[-max_messages:]
 
 
 def get_openai_client() -> OpenAI:
@@ -126,16 +171,33 @@ def build_sources(chunks: list[dict]) -> list[dict]:
     return sources
 
 
-def generate_answer(question: str, context: str, client: OpenAI) -> str:
-    """Call GPT-4o-mini with the RAG context. Cost-tracked."""
+def generate_answer(
+    question: str,
+    context: str,
+    client: OpenAI,
+    chat_history: list[dict] | None = None,
+) -> str:
+    """
+    Call GPT-4o-mini with the RAG context. Cost-tracked.
+
+    If chat_history is provided, prior turns are injected as native
+    user/assistant messages between the system prompt and the current
+    RAG prompt. This gives the model natural conversational context
+    (vs. stuffing history into the user prompt as flat text).
+    """
     user_prompt = USER_PROMPT_TEMPLATE.format(context=context, question=question)
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    # Inject prior conversation as native chat turns
+    if chat_history:
+        messages.extend(chat_history)
+
+    messages.append({"role": "user", "content": user_prompt})
 
     response = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
+        messages=messages,
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_MAX_TOKENS,
     )
@@ -173,8 +235,12 @@ def ask(
     oai = openai_client or get_openai_client()
     qd = qdrant_client or get_qdrant_client()
 
+    # 0. Sanitize and truncate history
+    history = sanitize_history(chat_history)
+    history = truncate_history(history)
+
     # 1. Classify intent + rewrite if needed
-    classification = classify_intent(question, chat_history, openai_client=oai)
+    classification = classify_intent(question, history, openai_client=oai)
     intent = classification["intent"]
 
     # 2. For greeting/off_topic — return direct response, skip retrieval
@@ -203,8 +269,8 @@ def ask(
     # 4. Build context from retrieved chunks
     context = build_context(chunks)
 
-    # 5. Generate answer
-    answer = generate_answer(question, context, oai)
+    # 5. Generate answer (with conversation history for multi-turn context)
+    answer = generate_answer(question, context, oai, chat_history=history)
 
     # 6. Extract sources
     sources = build_sources(chunks)
