@@ -152,7 +152,7 @@ POST /ask/stream ──────────────▶ check_input()
 
 ```bash
 # 1. Clone and install
-git clone <repo-url> && cd combinehealth
+git clone https://github.com/arbaz1000/combinehealth.git && cd combinehealth
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
