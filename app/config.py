@@ -29,7 +29,6 @@ EMBEDDING_DIM = 1536
 
 # ── Qdrant settings ───────────────────────────────────────────────────
 QDRANT_PATH = str(DATA_DIR / "qdrant_store")  # local persistent storage
-QDRANT_COLLECTION = "uhc_policies"
 
 # ── LLM settings ──────────────────────────────────────────────────────
 LLM_MODEL = "gpt-4o-mini"  # cheap + fast, good enough for RAG
@@ -52,9 +51,26 @@ RETRIEVAL_LOW_CONFIDENCE_THRESHOLD = 0.5
 MAX_HISTORY_TURNS = 5
 
 
+# ── Insurer configuration ─────────────────────────────────────────────
+# Set INSURER env var to switch providers (e.g., INSURER=aetna).
+# Each insurer needs a YAML config at config/insurers/{insurer}.yaml
+# and a pre-built Qdrant collection.
+
 @lru_cache()
-def load_insurer_config(insurer: str = "uhc") -> dict:
+def load_insurer_config(insurer: str | None = None) -> dict:
     """Load insurer-specific config from YAML."""
+    insurer = insurer or INSURER
     config_path = CONFIG_DIR / f"{insurer}.yaml"
     with open(config_path) as f:
         return yaml.safe_load(f)
+
+
+INSURER = os.getenv("INSURER", "uhc")
+_insurer_cfg = load_insurer_config(INSURER)
+
+# Provider display names — used across prompts, UI, and guardrails
+INSURER_NAME = _insurer_cfg["name"]                    # "UnitedHealthcare"
+INSURER_SHORT_NAME = _insurer_cfg["short_name"]        # "UHC"
+INSURER_CONTACT = _insurer_cfg.get("contact_info", f"{INSURER_SHORT_NAME} directly")
+INSURER_PORTAL = _insurer_cfg.get("provider_portal", f"the official {INSURER_SHORT_NAME} provider portal")
+QDRANT_COLLECTION = _insurer_cfg["collection_name"]    # "uhc_policies"

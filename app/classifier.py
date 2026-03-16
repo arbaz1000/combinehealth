@@ -18,7 +18,7 @@ import re
 
 from openai import AsyncOpenAI
 
-from app.config import LLM_MODEL
+from app.config import LLM_MODEL, INSURER_NAME, INSURER_SHORT_NAME
 from app.cost_tracker import log_call
 
 # ── Tier 1: Regex patterns for obvious intents ─────────────────────────
@@ -62,9 +62,9 @@ _BYE_PATTERNS = re.compile(
 
 # Tier 1 canned responses
 _GREETING_RESPONSE = (
-    "Hello! I'm the UHC policy assistant. I can help you understand "
+    f"Hello! I'm the {INSURER_SHORT_NAME} policy assistant. I can help you understand "
     "coverage details, CPT codes, prior authorization requirements, "
-    "and other UnitedHealthcare commercial policy questions. "
+    f"and other {INSURER_NAME} commercial policy questions. "
     "What would you like to know?"
 )
 
@@ -79,17 +79,17 @@ _BYE_RESPONSE = (
 
 # ── Tier 2: LLM-based classification prompt ────────────────────────────
 
-_CLASSIFIER_SYSTEM_PROMPT = """\
-You are an intent classifier for a UnitedHealthcare (UHC) insurance policy chatbot.
+_CLASSIFIER_SYSTEM_PROMPT = f"""\
+You are an intent classifier for a {INSURER_NAME} ({INSURER_SHORT_NAME}) insurance policy chatbot.
 
 Given the user's message and optional chat history, determine the intent and — if \
 needed — rewrite the query into a standalone question.
 
 ## Intents
 - greeting: casual hellos, greetings, or pleasantries
-- off_topic: questions unrelated to UHC insurance policies \
+- off_topic: questions unrelated to {INSURER_SHORT_NAME} insurance policies \
   (weather, sports, coding, general knowledge, etc.)
-- policy_query: a direct, self-contained question about UHC insurance policies, \
+- policy_query: a direct, self-contained question about {INSURER_SHORT_NAME} insurance policies, \
   coverage, CPT codes, prior auth, etc.
 - follow_up: a message that references previous conversation context \
   (pronouns like "it", "that", "those", or phrases like "what about", \
@@ -106,11 +106,11 @@ needed — rewrite the query into a standalone question.
    (let the retrieval system handle it).
 
 ## Output format (strict JSON)
-{
+{{
   "intent": "greeting" | "off_topic" | "policy_query" | "follow_up",
   "response": "direct response text (for greeting/off_topic only, null otherwise)",
   "rewritten_query": "standalone query (for policy_query/follow_up only, null otherwise)"
-}\
+}}\
 """
 
 

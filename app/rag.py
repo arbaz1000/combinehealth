@@ -25,14 +25,17 @@ from app.config import (
     LLM_MAX_TOKENS,
     TOP_K,
     MAX_HISTORY_TURNS,
+    INSURER_NAME,
+    INSURER_SHORT_NAME,
+    INSURER_CONTACT,
 )
 from app.cost_tracker import log_call
 from app.classifier import classify_intent
 from app.guardrails import check_retrieval, check_output
 
 # ── System prompt ──────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are an expert insurance policy assistant for doctors and clinic staff.
-You help them understand UnitedHealthcare (UHC) commercial medical policies — specifically whether procedures/treatments are covered, what the requirements are, and what codes apply.
+SYSTEM_PROMPT = f"""You are an expert insurance policy assistant for doctors and clinic staff.
+You help them understand {INSURER_NAME} ({INSURER_SHORT_NAME}) commercial medical policies — specifically whether procedures/treatments are covered, what the requirements are, and what codes apply.
 
 RULES:
 1. ONLY answer based on the provided policy context. Never make up coverage information.
@@ -76,43 +79,43 @@ FORMATTING:
 # retrieval confidence. In every tier it is forbidden from using its
 # own internal knowledge — answers must come only from retrieved context.
 
-USER_PROMPT_HIGH_CONFIDENCE = """Based on the following UHC policy excerpts, answer the user's question.
+USER_PROMPT_HIGH_CONFIDENCE = f"""Based on the following {INSURER_SHORT_NAME} policy excerpts, answer the user's question.
 
 --- POLICY CONTEXT ---
-{context}
+{{context}}
 --- END CONTEXT ---
 
 IMPORTANT: Use ONLY the policy context above. Do NOT use your own knowledge about insurance policies, medical procedures, or coverage. If the context does not contain enough information to fully answer, say so — do not fill gaps with outside knowledge.
 
-User question: {question}
+User question: {{question}}
 
 Answer using the response structure from your instructions (Coverage Summary → Requirements → Codes → Prior Auth → Related Policies). Skip sections that don't apply."""
 
-USER_PROMPT_LOW_CONFIDENCE = """The following UHC policy excerpts were retrieved but may not be directly relevant to the question. Use them if they are helpful, but be transparent about uncertainty.
+USER_PROMPT_LOW_CONFIDENCE = f"""The following {INSURER_SHORT_NAME} policy excerpts were retrieved but may not be directly relevant to the question. Use them if they are helpful, but be transparent about uncertainty.
 
 --- POLICY CONTEXT (potentially low relevance) ---
-{context}
+{{context}}
 --- END CONTEXT ---
 
 IMPORTANT:
 - Use ONLY the policy context above. Do NOT use your own knowledge about insurance policies, medical procedures, or coverage.
 - If the context does not adequately address the question, clearly state that the retrieved policies may not cover this topic.
 - Do NOT guess or infer coverage details that are not explicitly stated in the context.
-- Suggest that the user rephrase their question or contact UHC directly for clarification.
+- Suggest that the user rephrase their question or contact {INSURER_CONTACT} for clarification.
 
-User question: {question}
+User question: {{question}}
 
 Provide what information you can from the context, clearly noting any uncertainty. Use the response structure from your instructions where applicable, but prioritize transparency about limitations."""
 
-USER_PROMPT_NO_CONTEXT = """No relevant UHC policy excerpts were found for the user's question.
+USER_PROMPT_NO_CONTEXT = f"""No relevant {INSURER_SHORT_NAME} policy excerpts were found for the user's question.
 
 IMPORTANT:
-- Do NOT answer the question using your own knowledge. You do not have reliable information about UHC policy coverage beyond what is retrieved from the policy database.
+- Do NOT answer the question using your own knowledge. You do not have reliable information about {INSURER_SHORT_NAME} policy coverage beyond what is retrieved from the policy database.
 - Explain that no matching policy information was found.
 - Suggest the user try rephrasing their question with more specific terms (procedure names, CPT codes, diagnosis codes).
-- Recommend contacting UHC directly for coverage questions you cannot answer from the policy database.
+- Recommend contacting {INSURER_CONTACT} for coverage questions you cannot answer from the policy database.
 
-User question: {question}
+User question: {{question}}
 
 Respond helpfully while making clear you cannot provide policy details without matching context. Suggest specific ways the user can refine their search (e.g., using procedure names, CPT codes, or diagnosis codes)."""
 

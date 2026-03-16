@@ -111,9 +111,11 @@ def check_retrieval(chunks: list[dict]) -> tuple[list[dict], str]:
 
 # ── Output guardrails ──────────────────────────────────────────────────
 
+from app.config import INSURER_CONTACT
+
 MEDICAL_DISCLAIMER = (
     "\n\n*This information is for reference only. "
-    "Verify with UHC directly before making coverage decisions.*"
+    f"Verify with {INSURER_CONTACT} before making coverage decisions.*"
 )
 
 # Regex to extract policy numbers from LLM answers.

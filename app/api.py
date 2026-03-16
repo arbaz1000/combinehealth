@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from app.rag import ask, ask_stream, get_qdrant_client, get_openai_client
 from app.cost_tracker import get_summary
 from app.guardrails import check_input
+from app.config import INSURER_SHORT_NAME, QDRANT_COLLECTION
 
 
 # ── Lifespan: open/close clients once ─────────────────────────────────
@@ -39,7 +40,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="CombineHealth — Insurance Policy Chatbot",
-    description="RAG-powered chatbot for querying UHC insurance policies",
+    description=f"RAG-powered chatbot for querying {INSURER_SHORT_NAME} insurance policies",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -65,7 +66,7 @@ class AskRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "question": "Is spinal ablation covered under UHC commercial plans?",
+                "question": f"Is spinal ablation covered under {INSURER_SHORT_NAME} commercial plans?",
                 "chat_history": [],
             }
         }
@@ -88,7 +89,7 @@ class AskResponse(BaseModel):
 # ── Endpoints ──────────────────────────────────────────────────────────
 @app.post("/ask", response_model=AskResponse)
 async def ask_endpoint(req: AskRequest):
-    """Ask a question about UHC insurance policies."""
+    """Ask a question about insurance policies."""
     # Input guardrails — reject empty/too-long, redact PII
     ok, sanitized, _redacted = check_input(req.question)
     if not ok:
@@ -108,7 +109,7 @@ async def ask_endpoint(req: AskRequest):
 
 @app.post("/ask/stream")
 async def ask_stream_endpoint(req: AskRequest):
-    """Stream a response about UHC insurance policies via SSE."""
+    """Stream a response about insurance policies via SSE."""
     # Input guardrails — reject empty/too-long, redact PII
     ok, sanitized, _redacted = check_input(req.question)
     if not ok:
@@ -131,10 +132,10 @@ async def ask_stream_endpoint(req: AskRequest):
 async def health():
     """Health check — returns OK if the service is running and Qdrant is connected."""
     try:
-        info = qdrant_client.get_collection("uhc_policies")
+        info = qdrant_client.get_collection(QDRANT_COLLECTION)
         return {
             "status": "healthy",
-            "collection": "uhc_policies",
+            "collection": QDRANT_COLLECTION,
             "indexed_chunks": info.points_count,
         }
     except Exception as e:

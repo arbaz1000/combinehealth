@@ -18,10 +18,12 @@ from tqdm import tqdm
 
 # Project paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PROJECT_ROOT / "config" / "insurers" / "uhc.yaml"
+import os
+DEFAULT_INSURER = os.getenv("INSURER", "uhc")
+CONFIG_PATH = PROJECT_ROOT / "config" / "insurers" / f"{DEFAULT_INSURER}.yaml"
 PDF_DIR = PROJECT_ROOT / "data" / "raw_pdfs"
 MANIFEST_PATH = PROJECT_ROOT / "data" / "manifest.json"
-CHUNKS_PATH = PROJECT_ROOT / "data" / "chunks" / "uhc_chunks.jsonl"
+CHUNKS_PATH = PROJECT_ROOT / "data" / "chunks" / f"{DEFAULT_INSURER}_chunks.jsonl"
 
 # Major sections we care about (in priority order for RAG)
 # These are the top-level sections we'll use to label chunks
@@ -291,12 +293,17 @@ def get_already_parsed(chunks_path: Path) -> set[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Parse UHC policy PDFs and create chunks")
+    parser = argparse.ArgumentParser(description="Parse insurance policy PDFs and create chunks")
+    parser.add_argument("--insurer", default=DEFAULT_INSURER, help="Insurer config name (default: uhc)")
     parser.add_argument("--limit", type=int, help="Parse only N PDFs (for dev)")
     parser.add_argument("--single", type=str, help="Parse a single PDF by filename")
     parser.add_argument("--resume", action="store_true",
                         help="Skip PDFs already in the output file (resume after crash)")
     args = parser.parse_args()
+
+    global CONFIG_PATH, CHUNKS_PATH
+    CONFIG_PATH = PROJECT_ROOT / "config" / "insurers" / f"{args.insurer}.yaml"
+    CHUNKS_PATH = PROJECT_ROOT / "data" / "chunks" / f"{args.insurer}_chunks.jsonl"
 
     manifest = load_manifest()
 

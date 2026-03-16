@@ -27,11 +27,13 @@ from app.config import (
     QDRANT_COLLECTION,
     EMBEDDING_MODEL,
     EMBEDDING_DIM,
+    INSURER,
 )
 from app.cost_tracker import log_call, print_summary
 
 
-def load_chunks(insurer: str = "uhc") -> list[dict]:
+def load_chunks(insurer: str | None = None) -> list[dict]:
+    insurer = insurer or INSURER
     """Load chunks from JSONL file."""
     chunks_path = CHUNKS_DIR / f"{insurer}_chunks.jsonl"
     chunks = []
@@ -86,7 +88,7 @@ def build_payload(chunk: dict) -> dict:
         "effective_date": meta.get("effective_date", ""),
         "source_url": meta.get("source_url", ""),
         "filename": meta.get("filename", ""),
-        "insurer": meta.get("insurer", "UHC"),
+        "insurer": meta.get("insurer", INSURER),
         "section_name": meta.get("section_name", ""),
         "chunk_index": meta.get("chunk_index", 0),
         "applicable_cpt_codes": meta.get("applicable_cpt_codes", []),

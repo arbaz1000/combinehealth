@@ -22,7 +22,8 @@ from tqdm import tqdm
 
 # Project root = parent of scripts/
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PROJECT_ROOT / "config" / "insurers" / "uhc.yaml"
+DEFAULT_INSURER = os.getenv("INSURER", "uhc")
+CONFIG_PATH = PROJECT_ROOT / "config" / "insurers" / f"{DEFAULT_INSURER}.yaml"
 OUTPUT_DIR = PROJECT_ROOT / "data" / "raw_pdfs"
 MANIFEST_PATH = PROJECT_ROOT / "data" / "manifest.json"
 
@@ -149,11 +150,14 @@ def download_pdfs(policies: list[dict], config: dict, limit: int | None = None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Scrape UHC policy PDFs")
+    parser = argparse.ArgumentParser(description="Scrape insurance policy PDFs")
+    parser.add_argument("--insurer", default=DEFAULT_INSURER, help="Insurer config name (default: uhc)")
     parser.add_argument("--limit", type=int, help="Download only N policies (for dev)")
     parser.add_argument("--dry-run", action="store_true", help="List PDFs without downloading")
     args = parser.parse_args()
 
+    global CONFIG_PATH
+    CONFIG_PATH = PROJECT_ROOT / "config" / "insurers" / f"{args.insurer}.yaml"
     config = load_config()
     policies = fetch_pdf_links(config)
 

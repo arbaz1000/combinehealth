@@ -13,22 +13,24 @@ import os
 import streamlit as st
 import requests
 
+from app.config import INSURER_NAME, INSURER_SHORT_NAME, INSURER_PORTAL
+
 # ── Config ─────────────────────────────────────────────────────────────
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 # ── Page setup ─────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="CombineHealth — UHC Policy Assistant",
+    page_title=f"CombineHealth — {INSURER_SHORT_NAME} Policy Assistant",
     page_icon="🏥",
     layout="centered",
 )
 
 st.title("🏥 CombineHealth")
-st.caption("Ask questions about UnitedHealthcare commercial medical policies")
+st.caption(f"Ask questions about {INSURER_NAME} commercial medical policies")
 
 # ── Example questions ──────────────────────────────────────────────────
 EXAMPLES = [
-    "Is spinal ablation covered under UHC commercial plans?",
+    f"Is spinal ablation covered under {INSURER_SHORT_NAME} commercial plans?",
     "What are the prior authorization requirements for knee arthroscopy?",
     "What CPT codes are associated with cardiac catheterization?",
     "Is cosmetic rhinoplasty covered?",
@@ -43,12 +45,12 @@ with st.sidebar:
 
     st.divider()
     st.markdown(
-        "**About:** This chatbot queries UHC commercial medical & drug policies "
+        f"**About:** This chatbot queries {INSURER_SHORT_NAME} commercial medical & drug policies "
         "to help doctors and clinic staff check coverage before billing."
     )
     st.markdown(
         "**Disclaimer:** This tool is for informational purposes only. "
-        "Always verify with the official UHC provider portal."
+        f"Always verify with {INSURER_PORTAL}."
     )
 
 # ── Chat history ───────────────────────────────────────────────────────
@@ -105,7 +107,7 @@ def parse_sse_events(response: requests.Response):
 # ── Chat input ─────────────────────────────────────────────────────────
 # Check if there's a prefilled question from sidebar or retry
 prefill = st.session_state.pop("prefill_question", None)
-question = prefill or st.chat_input("Ask about a UHC policy, procedure, or CPT code...")
+question = prefill or st.chat_input(f"Ask about a {INSURER_SHORT_NAME} policy, procedure, or CPT code...")
 
 if question and question.strip():
     # Display user message
