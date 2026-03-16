@@ -107,7 +107,7 @@ def parse_sse_events(response: requests.Response):
 prefill = st.session_state.pop("prefill_question", None)
 question = prefill or st.chat_input("Ask about a UHC policy, procedure, or CPT code...")
 
-if question:
+if question and question.strip():
     # Display user message
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
@@ -144,30 +144,38 @@ if question:
             resp.raise_for_status()
 
             # Stream tokens into the UI
+            status_placeholder = st.empty()
             answer_placeholder = st.empty()
             accumulated_answer = ""
             sources = []
             first_token = True
 
-            with st.spinner("Searching policies..."):
-                for event in parse_sse_events(resp):
-                    event_type = event.get("type")
+            status_placeholder.markdown("*Thinking...*")
 
-                    if event_type == "intent":
-                        # Intent received — spinner is already showing
-                        pass
+            for event in parse_sse_events(resp):
+                event_type = event.get("type")
 
-                    elif event_type == "token":
-                        if first_token:
-                            first_token = False
-                        accumulated_answer += event.get("content", "")
-                        answer_placeholder.markdown(accumulated_answer + "▌")
+                if event_type == "intent":
+                    intent = event.get("intent", "")
+                    if intent in ("policy_query", "follow_up"):
+                        status_placeholder.markdown("*Searching policies...*")
+                    else:
+                        status_placeholder.empty()
 
-                    elif event_type == "sources":
-                        sources = event.get("sources", [])
+                elif event_type == "token":
+                    if first_token:
+                        first_token = False
+                        status_placeholder.empty()
+                    accumulated_answer += event.get("content", "")
+                    answer_placeholder.markdown(accumulated_answer + "▌")
 
-                    elif event_type == "done":
-                        break
+                elif event_type == "sources":
+                    sources = event.get("sources", [])
+
+                elif event_type == "done":
+                    break
+
+            status_placeholder.empty()
 
             # Final render without cursor
             answer_placeholder.markdown(accumulated_answer)

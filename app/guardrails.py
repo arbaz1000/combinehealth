@@ -183,7 +183,8 @@ def check_output(answer: str, chunks: list[dict]) -> str:
             warnings.append(OFFTOPIC_WARNING)
             break  # one warning is enough
 
-    # 3. Medical disclaimer — always last
-    warnings.append(MEDICAL_DISCLAIMER)
+    # 3. Medical disclaimer — always last (skip if LLM already included it)
+    if MEDICAL_DISCLAIMER.strip() not in answer:
+        warnings.append(MEDICAL_DISCLAIMER)
 
     return answer + "".join(warnings)
