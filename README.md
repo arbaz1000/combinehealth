@@ -278,6 +278,7 @@ How this system would scale for production deployment:
 | Monitoring | Cost tracker (JSONL) | CloudWatch metrics + alarms, OpenTelemetry traces |
 | Frontend | Streamlit | React/Next.js — custom UI, WebSocket, mobile-responsive |
 | Rate limiting | None | Redis token bucket per user/session |
+| OpenAI rate limits | Single API key | Multiple keys with round-robin, exponential backoff, upgrade to higher tier |
 | CI/CD | Manual deploy | GitHub Actions → ECR → ECS rolling deploy |
 
 ---
