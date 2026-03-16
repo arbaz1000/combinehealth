@@ -1,5 +1,9 @@
 # CombineHealth — UHC Insurance Policy RAG Chatbot
 
+> **Live Demo:** [https://huggingface.co/spaces/student2/combinehealth](https://huggingface.co/spaces/student2/combinehealth)
+>
+> The app sleeps after inactivity — if you see a loading screen, wait ~30 seconds for it to wake up.
+
 A production-grade RAG (Retrieval-Augmented Generation) chatbot that helps doctors and clinic staff query UnitedHealthcare (UHC) commercial medical policies. Ask about coverage, CPT codes, prior authorization requirements, and more — get sourced, structured answers streamed in real time.
 
 ## Key Features
