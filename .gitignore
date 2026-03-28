@@ -1,5 +1,7 @@
-# Data files (large, generated)
+# Data files (large, generated — except deployment-required dirs)
 data/
+!data/chunks/
+!data/qdrant_store/
 
 # Environment
 .env
