@@ -26,6 +26,8 @@ COPY start.sh .
 
 RUN chmod +x start.sh
 
+ENV PYTHONPATH=/app
+
 # OPENAI_API_KEY must be passed at runtime (not baked into image).
 # On HuggingFace Spaces: Settings → Secrets → add OPENAI_API_KEY
 # Locally: docker run -e OPENAI_API_KEY=sk-... ...
