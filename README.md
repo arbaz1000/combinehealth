@@ -1,3 +1,13 @@
+---
+title: CombineHealth
+emoji: 🏥
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # CombineHealth — Insurance Policy RAG Chatbot
 
 > **Live Demo:** [https://huggingface.co/spaces/student2/combinehealth](https://huggingface.co/spaces/student2/combinehealth)
